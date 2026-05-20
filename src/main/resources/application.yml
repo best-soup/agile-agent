@@ -1,0 +1,42 @@
+server:
+  port: 8080
+
+spring:
+  # 1. 数据库配置
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/agile_agent_db?useUnicode=true&characterEncoding=utf-8&useSSL=false
+    username: root
+    password: ${DB_PASSWORD}
+
+  # 2. Redis 配置
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+
+
+# 3. LangChain4j 大模型配置
+langchain4j:
+  open-ai:
+    chat-model:
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api-key: ${OPENAI_API_KEY}
+      model-name: qwen-turbo
+      temperature: 0.2 # 温度调低点，确保提取工单时的逻辑严谨性
+      log-requests: true
+      log-responses: true
+    streaming-chat-model:
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api-key: ${OPENAI_API_KEY}
+      model-name: qwen-turbo
+      log-requests: true
+      log-responses: true
+
+
+# 4. MyBatis-Plus 配置
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true # 开启驼峰命名自动映射 (task_id -> taskId)
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl # 在控制台打印 SQL 语句，方便你调试
