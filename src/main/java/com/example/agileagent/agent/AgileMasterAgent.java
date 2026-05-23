@@ -3,6 +3,7 @@ package com.example.agileagent.agent;
 
 import com.example.agileagent.dto.IssueListDTO;
 import com.example.agileagent.dto.TaskIssueDTO;
+import dev.langchain4j.service.MemoryId;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
@@ -43,4 +44,13 @@ public interface AgileMasterAgent {
             """)
     @UserMessage("请根据这段文本分析并提取任务工单: {{text}}")
     IssueListDTO extractIssues(@V("text") String text);
+
+    // ==========================================
+    // 🌟 新增：多轮对话能力
+    // ==========================================
+    @SystemMessage("你是一个敏捷项目管理的 AI 助手，你的名字叫'项目管家'。请用简短、幽默的语气和用户对话。")
+    String chat(
+            @MemoryId Long projectId, // 🌟 核心：这个注解会自动把聊天记录和 projectId 绑定！
+            @UserMessage String userText
+    );
 }

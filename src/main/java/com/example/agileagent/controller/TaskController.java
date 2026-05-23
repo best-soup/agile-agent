@@ -48,4 +48,18 @@ public class TaskController {
             return "❌ 报错了，错误原因: " + e.getMessage();
         }
     }
+
+    /**
+     * 测试多轮对话记忆
+     * 测试路径：POST http://localhost:8080/api/task/chat?projectId=1
+     */
+    @PostMapping("/chat")
+    public String chatWithAgent(
+            @RequestParam Long projectId,
+            @RequestBody String userMessage
+    ) {
+        System.out.println("收到聊天消息，查询上下文记忆中...");
+        // 直接调用 agent 的 chat 方法，框架会自动把历史记录和新消息一起发给大模型
+        return agileMasterAgent.chat(projectId, userMessage);
+    }
 }
