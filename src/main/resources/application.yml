@@ -5,7 +5,7 @@ spring:
   # 1. 数据库配置
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/agile_agent_db?useUnicode=true&characterEncoding=utf-8&useSSL=false
+    url: jdbc:mysql://localhost:3306/agile_agent_db?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true
     username: root
     password: ${DB_PASSWORD}
 
@@ -23,20 +23,33 @@ langchain4j:
     chat-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       api-key: ${OPENAI_API_KEY}
-      model-name: qwen-turbo
+      model-name: qwen-plus
       temperature: 0.2 # 温度调低点，确保提取工单时的逻辑严谨性
       log-requests: true
       log-responses: true
     streaming-chat-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       api-key: ${OPENAI_API_KEY}
-      model-name: qwen-turbo
+      model-name: qwen-plus
       log-requests: true
       log-responses: true
+    embedding-model:
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api-key: ${OPENAI_API_KEY}
+      model-name: text-embedding-v2
 
 
-# 4. MyBatis-Plus 配置
+# 4. 对话记忆 Redis 持久化配置
+agile:
+  chat:
+    memory:
+      max-messages: 10       # 每个会话保留最近 N 条消息
+      ttl-seconds: 604800    # Redis key 过期时间，默认 7 天（-1 表示永不过期）
+      key-prefix: "chat:memory:"  # Redis key 前缀
+
+# 5. MyBatis-Plus 配置
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true # 开启驼峰命名自动映射 (task_id -> taskId)
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl # 在控制台打印 SQL 语句，方便你调试
+

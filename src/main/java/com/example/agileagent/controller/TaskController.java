@@ -1,65 +1,80 @@
 package com.example.agileagent.controller;
 
 import com.example.agileagent.agent.AgileMasterAgent;
-import com.example.agileagent.dto.IssueListDTO;
-import com.example.agileagent.dto.TaskIssueDTO;
-import com.example.agileagent.service.TaskIssueService;
+import com.example.agileagent.service.RagService;
+import dev.langchain4j.service.TokenStream;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.util.List;
+import java.io.IOException;
 
 @RestController
 @RequestMapping("/api/task")
 public class TaskController {
 
-    // 把 AI 大脑注入进来
     @Autowired
     private AgileMasterAgent agileMasterAgent;
 
-    // 把 数据库保存服务注入进来
     @Autowired
-    private TaskIssueService taskIssueService;
+    private RagService ragService;
 
     /**
-     * 接收前端发来的会议纪要，并自动提取工单存入数据库
-     * 测试路径：POST http://localhost:8080/api/task/process?projectId=1
+     * 接收会议纪要，Agent 自动提取任务并通过 Tool 逐条入库
+     * POST http://localhost:8080/api/task/process?projectId=1
      */
     @PostMapping("/process")
     public String processMeetingText(
-            @RequestParam Long projectId, // 模拟前端传过来的项目ID
-            @RequestBody String meetingText // 接收放在请求体里的大段文字
+            @RequestParam Long projectId,
+            @RequestBody String meetingText
     ) {
-        try {
-            System.out.println("收到会议纪要，开始呼叫大模型...");
-
-            // 1. 接收包装好的实体类
-            IssueListDTO result = agileMasterAgent.extractIssues(meetingText);
-
-            // 2. 从实体类里把真正的 List 拿出来
-            List<TaskIssueDTO> issues = result.getIssues();
-
-            // 3. 存入数据库
-            taskIssueService.saveIssuesFromAi(projectId, issues);
-
-            return "🎉 成功解析并保存了 " + issues.size() + " 个待办任务！";
-        } catch (Exception e) {
-            e.printStackTrace();
-            return "❌ 报错了，错误原因: " + e.getMessage();
-        }
+        System.out.println("收到会议纪要，Agent 开始提取并入库...");
+        ragService.indexDocument(projectId, meetingText); // 同时索引到向量库
+        return agileMasterAgent.processAndSave(meetingText, projectId);
     }
 
     /**
-     * 测试多轮对话记忆
-     * 测试路径：POST http://localhost:8080/api/task/chat?projectId=1
+     * 多轮对话，带 Redis 记忆和 Tool 调用（阻塞式，等完整回复）
+     * POST http://localhost:8080/api/task/chat?projectId=1
      */
     @PostMapping("/chat")
     public String chatWithAgent(
             @RequestParam Long projectId,
             @RequestBody String userMessage
     ) {
-        System.out.println("收到聊天消息，查询上下文记忆中...");
-        // 直接调用 agent 的 chat 方法，框架会自动把历史记录和新消息一起发给大模型
+        System.out.println("收到聊天消息...");
         return agileMasterAgent.chat(projectId, userMessage);
+    }
+
+    /**
+     * 流式多轮对话（SSE，实时打字效果）
+     * POST http://localhost:8080/api/task/chat/stream?projectId=1
+     */
+    @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter chatStream(
+            @RequestParam Long projectId,
+            @RequestBody String userMessage
+    ) {
+        System.out.println("收到聊天消息（流式）...");
+        SseEmitter emitter = new SseEmitter(300_000L); // 5 分钟超时
+
+        TokenStream tokenStream = agileMasterAgent.chatStream(projectId, userMessage);
+
+        tokenStream.onPartialResponse(token -> {
+            try {
+                emitter.send(token);
+            } catch (IOException e) {
+                emitter.completeWithError(e);
+            }
+        });
+
+        tokenStream.onCompleteResponse(response -> emitter.complete());
+
+        tokenStream.onError(emitter::completeWithError);
+
+        new Thread(tokenStream::start).start();
+
+        return emitter;
     }
 }
