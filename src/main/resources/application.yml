@@ -24,15 +24,11 @@ langchain4j:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       api-key: ${OPENAI_API_KEY}
       model-name: qwen-plus
-      temperature: 0.2 # 温度调低点，确保提取工单时的逻辑严谨性
-      log-requests: true
-      log-responses: true
+      temperature: 0.2
     streaming-chat-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       api-key: ${OPENAI_API_KEY}
       model-name: qwen-plus
-      log-requests: true
-      log-responses: true
     embedding-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       api-key: ${OPENAI_API_KEY}
@@ -43,7 +39,7 @@ langchain4j:
 agile:
   chat:
     memory:
-      max-messages: 10       # 每个会话保留最近 N 条消息
+      max-messages: 20       # 每个会话保留最近 N 条消息
       ttl-seconds: 604800    # Redis key 过期时间，默认 7 天（-1 表示永不过期）
       key-prefix: "chat:memory:"  # Redis key 前缀
 
