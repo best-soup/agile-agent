@@ -31,3 +31,17 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Local agent/tooling config ###
+.claude/
+.mcp.json
+
+### Local demo data ###
+demo-data/
+测试数据/
+
+### Local benchmark and evaluation scripts ###
+local-benchmarks/
+
+### Local docs and drafts ###
+notes/

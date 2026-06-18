@@ -1,6 +1,7 @@
 package com.example.agileagent.controller;
 
 import com.example.agileagent.agent.AgileMasterAgent;
+import com.example.agileagent.agent.ManualReActAgent;
 import com.example.agileagent.service.RagService;
 import dev.langchain4j.service.TokenStream;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,6 +21,9 @@ public class TaskController {
     @Autowired
     private RagService ragService;
 
+    @Autowired
+    private ManualReActAgent manualReActAgent;
+
     /**
      * 接收会议纪要，Agent 自动提取任务并通过 Tool 逐条入库
      * POST http://localhost:8080/api/task/process?projectId=1
@@ -30,8 +34,26 @@ public class TaskController {
             @RequestBody String meetingText
     ) {
         System.out.println("收到会议纪要，Agent 开始提取并入库...");
-        ragService.indexDocument(projectId, meetingText); // 同时索引到向量库
+        String date = extractDate(meetingText);
+        ragService.indexDocument(projectId, meetingText,
+                "会议纪要 " + date, date, "api:/process");
         return agileMasterAgent.processAndSave(meetingText, projectId);
+    }
+
+    /**
+     * 手写 ReAct 版本：索引会议纪要并逐条创建工单。
+     * POST http://localhost:8080/api/task/process/manual?projectId=1
+     */
+    @PostMapping("/process/manual")
+    public ManualReActAgent.ReActResult processMeetingTextManual(
+            @RequestParam Long projectId,
+            @RequestBody String meetingText
+    ) {
+        System.out.println("收到会议纪要，手写 ReAct 开始提取并入库...");
+        String date = extractDate(meetingText);
+        ragService.indexDocument(projectId, meetingText,
+                "会议纪要 " + date, date, "api:/process/manual");
+        return manualReActAgent.processMeeting(projectId, meetingText);
     }
 
     /**
@@ -45,6 +67,19 @@ public class TaskController {
     ) {
         System.out.println("收到聊天消息...");
         return agileMasterAgent.chat(projectId, userMessage);
+    }
+
+    /**
+     * 手写 ReAct 版本：支持 Redis 多轮记忆、工单 Tool 和历史知识检索。
+     * POST http://localhost:8080/api/task/chat/manual?projectId=1
+     */
+    @PostMapping("/chat/manual")
+    public ManualReActAgent.ReActResult chatWithManualReAct(
+            @RequestParam Long projectId,
+            @RequestBody String userMessage
+    ) {
+        System.out.println("收到聊天消息（手写 ReAct）...");
+        return manualReActAgent.executeChat(projectId, userMessage);
     }
 
     /**
@@ -76,5 +111,19 @@ public class TaskController {
         new Thread(tokenStream::start).start();
 
         return emitter;
+    }
+
+    /** 从文本第一行提取日期，支持 "时间：2026-03-15" "2026年3月15日" 等格式，提取不到则用今天 */
+    private String extractDate(String text) {
+        if (text == null || text.isBlank()) return java.time.LocalDate.now().toString();
+        String firstLine = text.lines().findFirst().orElse("");
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(\\d{4})[-/年](\\d{1,2})[-/月](\\d{1,2})[日]?")
+                .matcher(firstLine);
+        if (m.find()) {
+            return String.format("%s-%02d-%02d", m.group(1),
+                    Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3)));
+        }
+        return java.time.LocalDate.now().toString();
     }
 }

@@ -32,7 +32,7 @@ langchain4j:
     embedding-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       api-key: ${OPENAI_API_KEY}
-      model-name: text-embedding-v2
+      model-name: text-embedding-v3
 
 
 # 4. 对话记忆 Redis 持久化配置
@@ -42,10 +42,18 @@ agile:
       max-messages: 20       # 每个会话保留最近 N 条消息
       ttl-seconds: 604800    # Redis key 过期时间，默认 7 天（-1 表示永不过期）
       key-prefix: "chat:memory:"  # Redis key 前缀
+      manual-key-prefix: "chat:memory:manual:"  # 手写 ReAct 独立记忆，避免与 @AiService 混用
 
 # 5. MyBatis-Plus 配置
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true # 开启驼峰命名自动映射 (task_id -> taskId)
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl # 在控制台打印 SQL 语句，方便你调试
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl # 开发环境打印 SQL，生产环境建议关闭
+
+# 6. Qdrant 向量库配置
+qdrant:
+  enabled: true  # true=Qdrant持久化, false=内存（默认）
+  host: localhost
+  port: 6334      # gRPC 端口
+  collection-name: agile-agent-docs
 
