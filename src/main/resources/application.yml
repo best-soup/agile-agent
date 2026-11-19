@@ -22,18 +22,17 @@ langchain4j:
   open-ai:
     chat-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api-key: ${OPENAI_API_KEY}
-      model-name: qwen-plus
+      api-key: ${DASHSCOPE_API_KEY}
+      model-name: qwen4-max
       temperature: 0.2
     streaming-chat-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api-key: ${OPENAI_API_KEY}
-      model-name: qwen-plus
+      api-key: ${DASHSCOPE_API_KEY}
+      model-name: qwen4-max
     embedding-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api-key: ${OPENAI_API_KEY}
+      api-key: ${DASHSCOPE_API_KEY}
       model-name: text-embedding-v3
-
 
 # 4. 对话记忆 Redis 持久化配置
 agile:
@@ -56,4 +55,5 @@ qdrant:
   host: localhost
   port: 6334      # gRPC 端口
   collection-name: agile-agent-docs
+
 

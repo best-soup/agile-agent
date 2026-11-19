@@ -37,10 +37,12 @@ public class ManualChatMemoryStore {
 
     public ChatMemory get(Long projectId) {
         return new RedisChatMemory(
-                projectId, redisTemplate, objectMapper, maxMessages, ttlSeconds, keyPrefix);
+                ProjectScope.requireUserId() + ":" + projectId,
+                redisTemplate, objectMapper, maxMessages, ttlSeconds, keyPrefix);
     }
 
     public String getUserProfile(Long projectId) {
-        return redisTemplate.opsForValue().get(PROFILE_KEY_PREFIX + projectId);
+        return redisTemplate.opsForValue().get(PROFILE_KEY_PREFIX
+                + ProjectScope.requireUserId() + ":" + projectId);
     }
 }

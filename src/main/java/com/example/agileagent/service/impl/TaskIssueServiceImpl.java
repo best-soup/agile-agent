@@ -5,6 +5,8 @@ import com.example.agileagent.dto.TaskIssueDTO;
 import com.example.agileagent.entity.TaskIssueEntity;
 import com.example.agileagent.mapper.TaskIssueMapper;
 import com.example.agileagent.service.TaskIssueService;
+import com.example.agileagent.service.ProjectAccessService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -14,8 +16,12 @@ import java.util.stream.Collectors;
 @Service // 告诉 Spring 这是一个业务逻辑类
 public class TaskIssueServiceImpl extends ServiceImpl<TaskIssueMapper, TaskIssueEntity> implements TaskIssueService {
 
+    @Autowired
+    private ProjectAccessService projectAccessService;
+
     @Override
     public void saveIssuesFromAi(Long projectId, List<TaskIssueDTO> aiExtractedIssues) {
+        projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
         if (aiExtractedIssues == null || aiExtractedIssues.isEmpty()) {
             System.out.println("AI 没有提取到任何任务，放弃保存。");
             return;

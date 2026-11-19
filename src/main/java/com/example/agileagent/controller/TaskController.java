@@ -2,7 +2,9 @@ package com.example.agileagent.controller;
 
 import com.example.agileagent.agent.AgileMasterAgent;
 import com.example.agileagent.agent.ManualReActAgent;
+import com.example.agileagent.config.ProjectScope;
 import com.example.agileagent.service.RagService;
+import com.example.agileagent.service.ProjectAccessService;
 import dev.langchain4j.service.TokenStream;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -24,6 +26,9 @@ public class TaskController {
     @Autowired
     private ManualReActAgent manualReActAgent;
 
+    @Autowired
+    private ProjectAccessService projectAccessService;
+
     /**
      * 接收会议纪要，Agent 自动提取任务并通过 Tool 逐条入库
      * POST http://localhost:8080/api/task/process?projectId=1
@@ -35,9 +40,12 @@ public class TaskController {
     ) {
         System.out.println("收到会议纪要，Agent 开始提取并入库...");
         String date = extractDate(meetingText);
-        ragService.indexDocument(projectId, meetingText,
-                "会议纪要 " + date, date, "api:/process");
-        return agileMasterAgent.processAndSave(meetingText, projectId);
+        return ProjectScope.runInProject(projectId, () -> {
+            projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
+            ragService.indexDocument(projectId, meetingText,
+                    "会议纪要 " + date, date, "api:/process");
+            return agileMasterAgent.processAndSave(meetingText, projectId);
+        });
     }
 
     /**
@@ -51,9 +59,12 @@ public class TaskController {
     ) {
         System.out.println("收到会议纪要，手写 ReAct 开始提取并入库...");
         String date = extractDate(meetingText);
-        ragService.indexDocument(projectId, meetingText,
-                "会议纪要 " + date, date, "api:/process/manual");
-        return manualReActAgent.processMeeting(projectId, meetingText);
+        return ProjectScope.runInProject(projectId, () -> {
+            projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
+            ragService.indexDocument(projectId, meetingText,
+                    "会议纪要 " + date, date, "api:/process/manual");
+            return manualReActAgent.processMeeting(projectId, meetingText);
+        });
     }
 
     /**
@@ -66,7 +77,10 @@ public class TaskController {
             @RequestBody String userMessage
     ) {
         System.out.println("收到聊天消息...");
-        return agileMasterAgent.chat(projectId, userMessage);
+        return ProjectScope.runInProject(projectId, () -> {
+            projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
+            return agileMasterAgent.chat(memoryId(projectId), userMessage);
+        });
     }
 
     /**
@@ -79,7 +93,10 @@ public class TaskController {
             @RequestBody String userMessage
     ) {
         System.out.println("收到聊天消息（手写 ReAct）...");
-        return manualReActAgent.executeChat(projectId, userMessage);
+        return ProjectScope.runInProject(projectId, () -> {
+            projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
+            return manualReActAgent.executeChat(projectId, userMessage);
+        });
     }
 
     /**
@@ -94,7 +111,11 @@ public class TaskController {
         System.out.println("收到聊天消息（流式）...");
         SseEmitter emitter = new SseEmitter(300_000L); // 5 分钟超时
 
-        TokenStream tokenStream = agileMasterAgent.chatStream(projectId, userMessage);
+        TokenStream tokenStream = ProjectScope.runInProject(projectId,
+                () -> {
+                    projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
+                    return agileMasterAgent.chatStream(memoryId(projectId), userMessage);
+                });
 
         tokenStream.onPartialResponse(token -> {
             try {
@@ -108,9 +129,14 @@ public class TaskController {
 
         tokenStream.onError(emitter::completeWithError);
 
-        new Thread(tokenStream::start).start();
+        Long userId = ProjectScope.requireUserId();
+        new Thread(() -> ProjectScope.runAs(userId, projectId, tokenStream::start)).start();
 
         return emitter;
+    }
+
+    private String memoryId(Long projectId) {
+        return ProjectScope.requireUserId() + ":" + projectId;
     }
 
     /** 从文本第一行提取日期，支持 "时间：2026-03-15" "2026年3月15日" 等格式，提取不到则用今天 */

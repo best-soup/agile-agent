@@ -3,6 +3,8 @@ package com.example.agileagent.agent;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.agileagent.entity.TaskIssueEntity;
 import com.example.agileagent.mapper.TaskIssueMapper;
+import com.example.agileagent.config.ProjectScope;
+import com.example.agileagent.service.ProjectAccessService;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,8 +19,12 @@ public class TaskTools {
     @Autowired
     private TaskIssueMapper taskIssueMapper;
 
+    @Autowired
+    private ProjectAccessService projectAccessService;
+
     @Tool("查询指定项目下的所有工单任务，返回工单列表（含ID、标题、负责人、优先级、截止日期、完成状态）")
     public String queryTasks(@P("项目ID") Long projectId) {
+        projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
         List<TaskIssueEntity> tasks = taskIssueMapper.selectList(
                 new LambdaQueryWrapper<TaskIssueEntity>()
                         .eq(TaskIssueEntity::getProjectId, projectId)
@@ -46,6 +52,8 @@ public class TaskTools {
             @P("负责人姓名") String assigneeName,
             @P("任务描述") String description) {
 
+        projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
+
         TaskIssueEntity entity = TaskIssueEntity.builder()
                 .projectId(projectId)
                 .title(title)
@@ -67,6 +75,8 @@ public class TaskTools {
             @P("任务描述") String description,
             @P("优先级 HIGH/MEDIUM/LOW") String priority,
             @P("截止日期 YYYY-MM-DD") String deadlineStr) {
+
+        projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
 
         LocalDate deadline = null;
         try {
@@ -94,7 +104,7 @@ public class TaskTools {
             @P("工单ID") Long taskId,
             @P("新优先级 HIGH/MEDIUM/LOW") String newPriority) {
 
-        TaskIssueEntity entity = taskIssueMapper.selectById(taskId);
+        TaskIssueEntity entity = requireTaskInCurrentProject(taskId, ProjectAccessService.Permission.WRITE);
         if (entity == null) {
             return "未找到 ID 为 " + taskId + " 的工单。";
         }
@@ -106,7 +116,7 @@ public class TaskTools {
 
     @Tool("将指定工单标记为已完成")
     public String markTaskComplete(@P("工单ID") Long taskId) {
-        TaskIssueEntity entity = taskIssueMapper.selectById(taskId);
+        TaskIssueEntity entity = requireTaskInCurrentProject(taskId, ProjectAccessService.Permission.WRITE);
         if (entity == null) {
             return "未找到 ID 为 " + taskId + " 的工单。";
         }
@@ -117,7 +127,7 @@ public class TaskTools {
 
     @Tool("删除指定工单")
     public String deleteTask(@P("工单ID") Long taskId) {
-        TaskIssueEntity entity = taskIssueMapper.selectById(taskId);
+        TaskIssueEntity entity = requireTaskInCurrentProject(taskId, ProjectAccessService.Permission.WRITE);
         if (entity == null) {
             return "未找到 ID 为 " + taskId + " 的工单。";
         }
@@ -130,6 +140,7 @@ public class TaskTools {
     public String queryByAssignee(
             @P("项目ID") Long projectId,
             @P("负责人姓名") String assigneeName) {
+        projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
         List<TaskIssueEntity> tasks = taskIssueMapper.selectList(
                 new LambdaQueryWrapper<TaskIssueEntity>()
                         .eq(TaskIssueEntity::getProjectId, projectId)
@@ -148,5 +159,22 @@ public class TaskTools {
                     .append(" | ").append(status).append("\n");
         }
         return sb.toString();
+    }
+
+    private TaskIssueEntity requireTaskInCurrentProject(Long taskId,
+                                                        ProjectAccessService.Permission permission) {
+        Long projectId = ProjectScope.currentProjectId();
+        if (projectId == null) {
+            throw new IllegalStateException("缺少当前项目上下文");
+        }
+        projectAccessService.requireCurrentProject(projectId, permission);
+        TaskIssueEntity entity = taskIssueMapper.selectById(taskId);
+        if (entity == null) {
+            return null;
+        }
+        if (!projectId.equals(entity.getProjectId())) {
+            throw new SecurityException("工单不属于当前项目");
+        }
+        return entity;
     }
 }

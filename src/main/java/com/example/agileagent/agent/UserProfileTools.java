@@ -1,5 +1,7 @@
 package com.example.agileagent.agent;
 
+import com.example.agileagent.config.ProjectScope;
+import com.example.agileagent.service.ProjectAccessService;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,12 +16,16 @@ public class UserProfileTools {
     @Autowired
     private StringRedisTemplate redisTemplate;
 
+    @Autowired
+    private ProjectAccessService projectAccessService;
+
     @Tool("记住关于当前用户的重要信息，如姓名、角色、偏好、工作习惯等。新信息会追加到已有画像中。")
     public String rememberUserFact(
             @P("项目ID") Long projectId,
             @P("关于用户的事实信息，例如'用户名叫张三，是前端负责人'") String fact) {
 
-        String key = PROFILE_KEY_PREFIX + projectId;
+        projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
+        String key = profileKey(projectId);
         String current = redisTemplate.opsForValue().get(key);
         if (current != null && current.contains(fact)) {
             return "已记录过：" + fact;
@@ -31,11 +37,16 @@ public class UserProfileTools {
 
     @Tool("查看当前已记住的用户画像信息")
     public String getUserProfile(@P("项目ID") Long projectId) {
-        String key = PROFILE_KEY_PREFIX + projectId;
+        projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
+        String key = profileKey(projectId);
         String profile = redisTemplate.opsForValue().get(key);
         if (profile == null || profile.isBlank()) {
             return "暂无用户画像记录。";
         }
         return "用户画像：" + profile;
+    }
+
+    private String profileKey(Long projectId) {
+        return PROFILE_KEY_PREFIX + ProjectScope.requireUserId() + ":" + projectId;
     }
 }

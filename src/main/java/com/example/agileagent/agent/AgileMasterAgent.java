@@ -70,13 +70,13 @@ public interface AgileMasterAgent {
 
     @SystemMessage(CHAT_SYSTEM_MESSAGE)
     String chat(
-            @MemoryId Long projectId,
+            @MemoryId String memoryId,
             @UserMessage String userText
     );
 
     @SystemMessage(CHAT_SYSTEM_MESSAGE)
     TokenStream chatStream(
-            @MemoryId Long projectId,
+            @MemoryId String memoryId,
             @UserMessage String userText
     );
 

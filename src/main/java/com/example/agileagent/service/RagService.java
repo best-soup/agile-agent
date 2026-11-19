@@ -9,7 +9,6 @@ import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
-import dev.langchain4j.store.embedding.qdrant.QdrantEmbeddingStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -35,7 +34,7 @@ public class RagService {
         this.embeddingModel = embeddingModel;
 
         if (qdrantEnabled) {
-            this.embeddingStore = QdrantEmbeddingStore.builder()
+            this.embeddingStore = CompatibleQdrantEmbeddingStore.compatibleBuilder()
                     .host(qdrantHost)
                     .port(qdrantPort)
                     .collectionName(collectionName)
