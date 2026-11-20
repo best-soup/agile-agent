@@ -1,6 +1,6 @@
 # Agile Agent 项目现阶段总结
 
-更新时间：2026-10-10
+更新时间：2026-11-19
 
 ## 一句话结论
 
@@ -42,7 +42,7 @@
 - 生产级完成度：约 30%。
 - 面试展示完成度：约 60%～70%。
 
-当前执行 `.\mvnw.cmd test` 可以通过，共 4 个测试（1 个 Spring 启动测试、3 个权限边界单测）。这只能证明代码可编译、Spring 容器可启动和部分权限规则成立，不能证明 Agent、Tool、MySQL、Redis、Qdrant 或 SSE 链路可靠。
+当前执行 `.\mvnw.cmd test` 可以通过，共 7 个测试（1 个 Spring 启动测试、3 个权限边界单测、3 个 Qdrant 兼容读取测试）。这只能证明代码可编译、Spring 容器可启动和部分边界规则成立，不能替代完整的生产并发验证。
 
 ## 当前最重要的问题
 
@@ -76,7 +76,30 @@ SSE 每个请求直接创建一个新线程，没有受控线程池、取消机�
 
 ### 5. 测试和交付材料不足
 
-仓库缺少 README、建表 SQL、Docker Compose、测试数据和完整接口说明。`notes/`、`local-benchmarks/` 和 `demo-data/` 被 `.gitignore` 排除，实验记录和评估数据不会随 Git 交付。
+仓库缺少 README、Docker Compose、测试数据和完整接口说明；数据库结构已通过 Flyway 管理，并保留可重复执行的手工初始化脚本 `src/main/resources/db/schema.sql`。`notes/`、`local-benchmarks/` 和 `demo-data/` 被 `.gitignore` 排除，实验记录和评估数据不会随 Git 交付。
+
+### 数据库迁移与初始化
+
+数据库迁移入口是 `src/main/resources/db/migration`：
+
+- `V1__baseline_schema.sql` 创建四张完整业务表：`app_user`、`agile_project`、`project_member`、`task_issue`。
+- `V2__Harden_schema.java` 先检查现有四张表和 `task_issue` 的实体字段，再补工单查询索引和必要外键；缺少既有字段时直接失败，不自动猜测或新增业务字段。
+- `spring.flyway.baseline-on-migrate=true` 兼容已有无 Flyway 历史的数据库：已有表会建立版本 1 基线，然后执行 V2；全新数据库会依次执行 V1、V2。
+- Flyway 禁止 `clean`。重复启动只执行未完成的版本迁移，不删除表、不清空数据。
+
+全新数据库初始化：
+
+1. 创建空的 `agile_agent_db` 数据库。
+2. 设置 `DB_PASSWORD`，启动 Spring Boot：`.\mvnw.cmd spring-boot:run`。
+3. Flyway 自动创建四张表并补索引、外键。
+
+已有数据库升级：
+
+1. 先备份数据库，并确认 `task_issue` 包含实体要求的九个字段。
+2. 设置同一数据库连接配置，启动应用。
+3. Flyway 自动建立基线并执行 V2；若发现字段、表或历史数据不满足约束，应用会失败并保留原数据，需人工检查后再处理。
+
+不希望应用自动迁移时，可设置 `SPRING_FLYWAY_ENABLED=false`；手工初始化/核对可执行 `src/main/resources/db/schema.sql`，该脚本使用 `CREATE TABLE IF NOT EXISTS`，重复执行不会删除已有表或数据。
 
 ## 项目真正值得展示的地方
 
@@ -91,9 +114,9 @@ SSE 每个请求直接创建一个新线程，没有受控线程池、取消机�
 
 ### 阶段 1 收尾（先于下一阶段功能开发）
 
-1. 完成 MySQL、Redis、Qdrant 的真实 smoke test。
-2. 增加用户、项目、成员和 Viewer 写入拒绝的 Controller/API 集成测试。
-3. 核对旧 `task_issue` 表、`schema.sql` 和部署初始化流程。
+1. 已完成 MySQL、Redis、Qdrant 的真实 smoke test。
+2. 已完成用户、项目、成员和 Viewer 写入拒绝的 API 权限测试。
+3. 已核对四张业务表结构，接入 Flyway 迁移，并补充可重复执行的初始化说明。
 
 ### 第一优先级：可信业务闭环
 

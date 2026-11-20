@@ -1,0 +1,20 @@
+spring:
+  datasource:
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:mem:agile_agent_test;MODE=MySQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+  flyway:
+    enabled: false
+
+langchain4j:
+  open-ai:
+    chat-model:
+      api-key: test-key
+    streaming-chat-model:
+      api-key: test-key
+    embedding-model:
+      api-key: test-key
+
+qdrant:
+  enabled: false
