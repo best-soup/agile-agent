@@ -12,7 +12,7 @@ public final class ProjectScope {
 
     public static <T> T runAs(Long userId, Long projectId, Supplier<T> action) {
         Scope previous = CURRENT.get();
-        CURRENT.set(new Scope(userId, projectId));
+        CURRENT.set(new Scope(userId, projectId, previous == null ? null : previous.requestId()));
         try {
             return action.get();
         } finally {
@@ -25,7 +25,11 @@ public final class ProjectScope {
     }
 
     public static void authenticate(Long userId) {
-        CURRENT.set(new Scope(userId, null));
+        authenticate(userId, null);
+    }
+
+    public static void authenticate(Long userId, String requestId) {
+        CURRENT.set(new Scope(userId, null, requestId));
     }
 
     public static void clear() {
@@ -83,6 +87,11 @@ public final class ProjectScope {
         return scope == null ? null : scope.userId();
     }
 
-    private record Scope(Long userId, Long projectId) {
+    public static String currentRequestId() {
+        Scope scope = CURRENT.get();
+        return scope == null ? null : scope.requestId();
+    }
+
+    private record Scope(Long userId, Long projectId, String requestId) {
     }
 }

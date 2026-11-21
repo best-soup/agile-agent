@@ -8,6 +8,7 @@ import com.example.agileagent.entity.TaskDraftItemEntity;
 import com.example.agileagent.service.TaskDraftService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping("/api/projects/{projectId}/task-drafts")
@@ -24,7 +25,7 @@ public class TaskDraftController {
     @PatchMapping("/{draftId}/items/{itemId}")
     public TaskDraftItemEntity updateItem(@PathVariable Long projectId, @PathVariable Long draftId,
                                           @PathVariable Long itemId,
-                                          @RequestBody UpdateTaskDraftItemRequest request) {
+                                          @Valid @RequestBody UpdateTaskDraftItemRequest request) {
         return ProjectScope.runInProject(projectId, () -> drafts.updateItem(projectId, draftId, itemId, request));
     }
 
@@ -47,7 +48,7 @@ public class TaskDraftController {
 
     @PostMapping("/{draftId}/submit")
     public TaskDraftResponse submit(@PathVariable Long projectId, @PathVariable Long draftId,
-                                    @RequestBody SubmitTaskDraftRequest request) {
+                                    @Valid @RequestBody SubmitTaskDraftRequest request) {
         return ProjectScope.runInProject(projectId, () -> drafts.submit(projectId, draftId, request));
     }
 }

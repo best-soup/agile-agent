@@ -56,7 +56,11 @@ agile:
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true # 开启驼峰命名自动映射 (task_id -> taskId)
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl # 开发环境打印 SQL，生产环境建议关闭
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl # 避免 SQL 参数日志泄露凭证摘要或业务文本
+
+logging:
+  pattern:
+    level: "%5p [requestId=%X{requestId}]"
 
 # 7. Qdrant 向量库配置
 qdrant:

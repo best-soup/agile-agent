@@ -85,6 +85,7 @@ public class TaskController {
             @RequestParam Long projectId,
             @RequestBody String userMessage
     ) {
+        requireMessage(userMessage);
         System.out.println("收到聊天消息...");
         return ProjectScope.runInProject(projectId, () -> {
             projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
@@ -101,6 +102,7 @@ public class TaskController {
             @RequestParam Long projectId,
             @RequestBody String userMessage
     ) {
+        requireMessage(userMessage);
         System.out.println("收到聊天消息（手写 ReAct）...");
         return ProjectScope.runInProject(projectId, () -> {
             projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
@@ -117,6 +119,7 @@ public class TaskController {
             @RequestParam Long projectId,
             @RequestBody String userMessage
     ) {
+        requireMessage(userMessage);
         System.out.println("收到聊天消息（流式）...");
         SseEmitter emitter = new SseEmitter(300_000L); // 5 分钟超时
 
@@ -161,6 +164,12 @@ public class TaskController {
     private void requireMeetingText(String meetingText) {
         if (meetingText == null || meetingText.isBlank()) {
             throw new IllegalArgumentException("会议纪要不能为空");
+        }
+    }
+
+    private void requireMessage(String userMessage) {
+        if (userMessage == null || userMessage.isBlank()) {
+            throw new IllegalArgumentException("消息内容不能为空");
         }
     }
 

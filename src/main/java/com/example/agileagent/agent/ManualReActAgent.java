@@ -147,8 +147,8 @@ public class ManualReActAgent {
         List<ReActStep> trace = new ArrayList<>();
         Instant start = Instant.now();
 
-        log.info("══════ ReAct 循环开始 mode={} projectId={} userInput={}",
-                mode, projectId, userInput);
+        log.info("══════ ReAct 循环开始 mode={} projectId={} inputLength={}",
+                mode, projectId, userInput == null ? 0 : userInput.length());
 
         for (int step = 0; step < MAX_STEPS; step++) {
             log.info("── ReAct Step {} ──", step);

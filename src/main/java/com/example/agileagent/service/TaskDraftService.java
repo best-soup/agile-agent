@@ -76,7 +76,7 @@ public class TaskDraftService {
             for (CreateTaskRequest item : normalized) {
                 itemMapper.insert(toItem(draft.getId(), item, order++));
             }
-            audit(projectId, userId, "DRAFT_CREATED", "TASK_DRAFT", draft.getId(), null,
+            audit(projectId, userId, "DRAFT_CREATED", "TASK_DRAFT", draft.getId(), requestId(),
                     "meeting items=" + normalized.size());
             return get(projectId, draft.getId());
         });
@@ -105,7 +105,7 @@ public class TaskDraftService {
                 .sortOrder(request.sortOrder() == null ? 0 : request.sortOrder()).updatedAt(LocalDateTime.now()).build();
         itemMapper.updateById(item);
         touch(draftId);
-        audit(projectId, ProjectScope.requireUserId(), "DRAFT_ITEM_UPDATED", "TASK_DRAFT_ITEM", itemId, null, null);
+        audit(projectId, ProjectScope.requireUserId(), "DRAFT_ITEM_UPDATED", "TASK_DRAFT_ITEM", itemId, requestId(), null);
         return item;
     }
 
@@ -117,7 +117,7 @@ public class TaskDraftService {
         itemMapper.delete(new LambdaQueryWrapper<TaskDraftItemEntity>().eq(TaskDraftItemEntity::getId, itemId)
                 .eq(TaskDraftItemEntity::getDraftId, draftId));
         touch(draftId);
-        audit(projectId, ProjectScope.requireUserId(), "DRAFT_ITEM_DELETED", "TASK_DRAFT_ITEM", itemId, null, null);
+        audit(projectId, ProjectScope.requireUserId(), "DRAFT_ITEM_DELETED", "TASK_DRAFT_ITEM", itemId, requestId(), null);
     }
 
     @Transactional
@@ -130,7 +130,7 @@ public class TaskDraftService {
         draftMapper.update(null, new LambdaUpdateWrapper<TaskDraftEntity>().eq(TaskDraftEntity::getId, draftId)
                 .set(TaskDraftEntity::getStatus, CONFIRMED).set(TaskDraftEntity::getConfirmedAt, now)
                 .set(TaskDraftEntity::getUpdatedAt, now));
-        audit(projectId, ProjectScope.requireUserId(), "DRAFT_CONFIRMED", "TASK_DRAFT", draftId, null, null);
+        audit(projectId, ProjectScope.requireUserId(), "DRAFT_CONFIRMED", "TASK_DRAFT", draftId, requestId(), null);
         return get(projectId, draftId);
     }
 
@@ -140,7 +140,7 @@ public class TaskDraftService {
         if (!DRAFT.equals(draft.getStatus())) throw new DraftStateException("只有 DRAFT 状态可以取消");
         draftMapper.update(null, new LambdaUpdateWrapper<TaskDraftEntity>().eq(TaskDraftEntity::getId, draftId)
                 .set(TaskDraftEntity::getStatus, CANCELLED).set(TaskDraftEntity::getUpdatedAt, LocalDateTime.now()));
-        audit(projectId, ProjectScope.requireUserId(), "DRAFT_CANCELLED", "TASK_DRAFT", draftId, null, null);
+        audit(projectId, ProjectScope.requireUserId(), "DRAFT_CANCELLED", "TASK_DRAFT", draftId, requestId(), null);
         return get(projectId, draftId);
     }
 
@@ -158,7 +158,7 @@ public class TaskDraftService {
             draftMapper.update(null, new LambdaUpdateWrapper<TaskDraftEntity>().eq(TaskDraftEntity::getId, draftId)
                     .set(TaskDraftEntity::getStatus, SUBMITTING).set(TaskDraftEntity::getIdempotencyKey, key)
                     .set(TaskDraftEntity::getFailureReason, null).set(TaskDraftEntity::getUpdatedAt, LocalDateTime.now()));
-            audit(projectId, ProjectScope.requireUserId(), "DRAFT_SUBMITTING", "TASK_DRAFT", draftId, key, null);
+            audit(projectId, ProjectScope.requireUserId(), "DRAFT_SUBMITTING", "TASK_DRAFT", draftId, requestId(), "idempotencyKey=" + key);
         });
         try {
             return transactionTemplate.execute(status -> {
@@ -171,15 +171,16 @@ public class TaskDraftService {
                 draftMapper.update(null, new LambdaUpdateWrapper<TaskDraftEntity>().eq(TaskDraftEntity::getId, draftId)
                         .set(TaskDraftEntity::getStatus, SUBMITTED).set(TaskDraftEntity::getSubmittedTaskIds, ids.stream().map(String::valueOf).collect(Collectors.joining(",")))
                         .set(TaskDraftEntity::getSubmittedAt, now).set(TaskDraftEntity::getUpdatedAt, now));
-                audit(projectId, ProjectScope.requireUserId(), "DRAFT_SUBMITTED", "TASK_DRAFT", draftId, key, "taskIds=" + ids);
+                audit(projectId, ProjectScope.requireUserId(), "DRAFT_SUBMITTED", "TASK_DRAFT", draftId, requestId(), "idempotencyKey=" + key + ";taskIds=" + ids);
                 return get(projectId, draftId);
             });
         } catch (RuntimeException exception) {
             transactionTemplate.executeWithoutResult(status -> {
                 draftMapper.update(null, new LambdaUpdateWrapper<TaskDraftEntity>().eq(TaskDraftEntity::getId, draftId)
-                        .set(TaskDraftEntity::getStatus, FAILED).set(TaskDraftEntity::getFailureReason, truncate(exception.getMessage()))
+                        .set(TaskDraftEntity::getStatus, FAILED)
+                        .set(TaskDraftEntity::getFailureReason, "任务批量提交失败，请检查任务数据后重试")
                         .set(TaskDraftEntity::getUpdatedAt, LocalDateTime.now()));
-                audit(projectId, ProjectScope.requireUserId(), "DRAFT_SUBMIT_FAILED", "TASK_DRAFT", draftId, key, truncate(exception.toString()));
+                audit(projectId, ProjectScope.requireUserId(), "DRAFT_SUBMIT_FAILED", "TASK_DRAFT", draftId, requestId(), "idempotencyKey=" + key + ";failure=批量提交失败");
             });
             throw exception;
         }
@@ -242,7 +243,9 @@ public class TaskDraftService {
                 .resourceType(resourceType).resourceId(resourceId).requestId(requestId).detail(detail).createdAt(LocalDateTime.now()).build());
     }
 
-    private String truncate(String value) { return value == null ? "unknown failure" : value.substring(0, Math.min(1000, value.length())); }
+    private String requestId() {
+        return ProjectScope.currentRequestId();
+    }
 
     private String sha256(String value) {
         try { return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }

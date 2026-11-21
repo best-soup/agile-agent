@@ -1,6 +1,7 @@
 package com.example.agileagent.controller;
 
 import com.example.agileagent.config.ProjectScope;
+import com.example.agileagent.config.RequestIdFilter;
 import com.example.agileagent.dto.TaskPageResponse;
 import com.example.agileagent.service.TaskIssueService;
 import com.example.agileagent.service.TaskNotFoundException;
@@ -21,7 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ProjectTaskControllerTests {
     private final TaskIssueService service = mock(TaskIssueService.class);
     private final MockMvc mvc = MockMvcBuilders.standaloneSetup(new ProjectTaskController(service))
-            .setControllerAdvice(new ApiExceptionHandler()).build();
+            .setControllerAdvice(new ApiExceptionHandler()).addFilters(new RequestIdFilter()).build();
 
     @BeforeEach
     void authenticate() { ProjectScope.authenticate(2L); }
@@ -50,6 +51,21 @@ class ProjectTaskControllerTests {
                 .andExpect(status().isBadRequest());
         when(service.getTask(10L, 201L)).thenThrow(new TaskNotFoundException());
         mvc.perform(get("/api/projects/10/tasks/201"))
-                .andExpect(status().isNotFound()).andExpect(jsonPath("$.error").exists());
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("TASK_NOT_FOUND"))
+                .andExpect(jsonPath("$.requestId").exists())
+                .andExpect(jsonPath("$.timestamp").exists())
+                .andExpect(jsonPath("$.fieldErrors").isArray());
+    }
+
+    @Test
+    void invalidTaskRequestReturnsFieldErrorsAndPropagatesRequestId() throws Exception {
+        mvc.perform(post("/api/projects/10/tasks").header("X-Request-Id", "test-request-123")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"priority\":\"URGENT\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string("X-Request-Id", "test-request-123"))
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.requestId").value("test-request-123"))
+                .andExpect(jsonPath("$.fieldErrors[?(@.field == 'title')]").isNotEmpty());
     }
 }

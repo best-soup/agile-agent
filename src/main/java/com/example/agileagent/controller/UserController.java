@@ -11,6 +11,7 @@ import com.example.agileagent.service.UserAuthService;
 import com.example.agileagent.service.UserApiKeyService;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
+import jakarta.validation.Valid;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -31,7 +32,7 @@ public class UserController {
 
     @PostMapping
     @Transactional
-    public CreateUserResponse create(@RequestBody CreateUserRequest request) {
+    public CreateUserResponse create(@Valid @RequestBody CreateUserRequest request) {
         if (request == null || request.username() == null || request.username().isBlank()) {
             throw new IllegalArgumentException("用户名不能为空");
         }
@@ -39,7 +40,6 @@ public class UserController {
         UserEntity user = UserEntity.builder()
                 .username(request.username().trim())
                 .displayName(request.displayName())
-                .apiKeyHash(UserAuthService.sha256(apiKey))
                 .createdAt(LocalDateTime.now())
                 .build();
         userMapper.insert(user);
@@ -48,7 +48,7 @@ public class UserController {
     }
 
     @PostMapping("/me/api-keys")
-    public ApiKeyCreatedResponse createKey(@RequestBody(required = false) CreateApiKeyRequest request) {
+    public ApiKeyCreatedResponse createKey(@Valid @RequestBody(required = false) CreateApiKeyRequest request) {
         return apiKeyService.createForCurrentUser(request == null ? null : request.name(),
                 request == null ? null : request.expiresAt());
     }
@@ -60,7 +60,7 @@ public class UserController {
 
     @PostMapping("/me/api-keys/{id}/rotate")
     public ApiKeyCreatedResponse rotateKey(@PathVariable Long id,
-                                            @RequestBody(required = false) CreateApiKeyRequest request) {
+                                            @Valid @RequestBody(required = false) CreateApiKeyRequest request) {
         return apiKeyService.rotateForCurrentUser(id, request == null ? null : request.name(),
                 request == null ? null : request.expiresAt());
     }

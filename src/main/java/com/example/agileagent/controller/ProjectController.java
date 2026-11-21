@@ -9,6 +9,7 @@ import com.example.agileagent.mapper.ProjectMemberMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.agileagent.service.ProjectAccessService;
 import org.springframework.web.bind.annotation.*;
+import jakarta.validation.Valid;
 
 import java.util.List;
 
@@ -25,7 +26,7 @@ public class ProjectController {
     }
 
     @PostMapping
-    public ProjectEntity create(@RequestBody CreateProjectRequest request) {
+    public ProjectEntity create(@Valid @RequestBody CreateProjectRequest request) {
         Long userId = ProjectScope.requireUserId();
         return accessService.createProject(userId, request.name(), request.description());
     }
@@ -39,7 +40,7 @@ public class ProjectController {
 
     @PostMapping("/{projectId}/members")
     public ProjectMemberEntity addMember(@PathVariable Long projectId,
-                                         @RequestBody ProjectMemberRequest request) {
+                                         @Valid @RequestBody ProjectMemberRequest request) {
         if (request == null || request.userId() == null) {
             throw new IllegalArgumentException("成员用户 ID 不能为空");
         }

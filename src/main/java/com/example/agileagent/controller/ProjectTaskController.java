@@ -8,6 +8,7 @@ import com.example.agileagent.entity.TaskIssueEntity;
 import com.example.agileagent.service.TaskIssueService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping("/api/projects/{projectId}/tasks")
@@ -36,19 +37,19 @@ public class ProjectTaskController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public TaskIssueEntity create(@PathVariable Long projectId, @RequestBody CreateTaskRequest request) {
+    public TaskIssueEntity create(@PathVariable Long projectId, @Valid @RequestBody CreateTaskRequest request) {
         return ProjectScope.runInProject(projectId, () -> tasks.createTask(projectId, request));
     }
 
     @PutMapping("/{taskId}")
     public TaskIssueEntity update(@PathVariable Long projectId, @PathVariable Long taskId,
-                                  @RequestBody UpdateTaskRequest request) {
+                                  @Valid @RequestBody UpdateTaskRequest request) {
         return ProjectScope.runInProject(projectId, () -> tasks.updateTask(projectId, taskId, request));
     }
 
     @PatchMapping("/{taskId}/completion")
     public TaskIssueEntity completion(@PathVariable Long projectId, @PathVariable Long taskId,
-                                      @RequestBody CompletionRequest request) {
+                                      @Valid @RequestBody CompletionRequest request) {
         if (request.completed() == null) throw new IllegalArgumentException("completed 不能为空");
         return ProjectScope.runInProject(projectId, () -> tasks.setCompleted(projectId, taskId, request.completed()));
     }
@@ -59,5 +60,5 @@ public class ProjectTaskController {
         ProjectScope.runInProject(projectId, () -> tasks.deleteTask(projectId, taskId));
     }
 
-    public record CompletionRequest(Boolean completed) {}
+    public record CompletionRequest(@jakarta.validation.constraints.NotNull(message = "completed 不能为空") Boolean completed) {}
 }
