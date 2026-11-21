@@ -12,23 +12,37 @@ import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.time.Duration;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 public class RedisChatMemory implements ChatMemory {
 
     private final String redisKey;
+    private final String listKey;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final int maxMessages;
     private final long ttlSeconds;
+    private static final DefaultRedisScript<Long> APPEND_SCRIPT = new DefaultRedisScript<>("""
+            redis.call('RPUSH', KEYS[1], ARGV[1])
+            redis.call('LTRIM', KEYS[1], ARGV[2], '-1')
+            if tonumber(ARGV[3]) > 0 then redis.call('EXPIRE', KEYS[1], ARGV[3]) end
+            return 1
+            """, Long.class);
+    private static final DefaultRedisScript<Long> RELEASE_LOCK_SCRIPT = new DefaultRedisScript<>("""
+            if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end
+            """, Long.class);
 
     public RedisChatMemory(Object memoryId, StringRedisTemplate redisTemplate,
                            ObjectMapper objectMapper, int maxMessages, long ttlSeconds,
                            String keyPrefix) {
         this.redisKey = keyPrefix + memoryId;
+        this.listKey = this.redisKey + ":v2";
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.maxMessages = maxMessages;
@@ -37,25 +51,28 @@ public class RedisChatMemory implements ChatMemory {
 
     @Override
     public void add(ChatMessage message) {
-        List<ChatMessage> messages = messages();
-        messages.add(message);
-        while (messages.size() > maxMessages) {
-            messages.remove(0);
+        try {
+            initializeListFromLegacyIfNeeded();
+            String serialized = objectMapper.writeValueAsString(serializeMessage(message));
+            redisTemplate.execute(APPEND_SCRIPT, List.of(listKey), serialized,
+                    Integer.toString(-Math.max(1, maxMessages)), "-1", Long.toString(ttlSeconds));
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to append chat memory to Redis", e);
         }
-        save(messages);
     }
 
     @Override
     public List<ChatMessage> messages() {
-        String json = redisTemplate.opsForValue().get(redisKey);
-        if (json == null || json.isEmpty()) {
-            return new ArrayList<>();
-        }
         try {
-            ArrayNode array = (ArrayNode) objectMapper.readTree(json);
+            List<String> entries = redisTemplate.opsForList().range(listKey, 0, -1);
+            if (entries == null || entries.isEmpty()) {
+                String legacyJson = redisTemplate.opsForValue().get(redisKey);
+                if (legacyJson == null || legacyJson.isEmpty()) return new ArrayList<>();
+                entries = legacyEntries(legacyJson);
+            }
             List<ChatMessage> messages = new ArrayList<>();
-            for (JsonNode node : array) {
-                messages.add(deserializeMessage((ObjectNode) node));
+            for (String entry : entries) {
+                messages.add(deserializeMessage((ObjectNode) objectMapper.readTree(entry)));
             }
             return messages;
         } catch (Exception e) {
@@ -66,24 +83,46 @@ public class RedisChatMemory implements ChatMemory {
 
     @Override
     public void clear() {
-        redisTemplate.delete(redisKey);
+        redisTemplate.delete(List.of(redisKey, listKey, listKey + ":init-lock"));
     }
 
-    private void save(List<ChatMessage> messages) {
-        try {
-            ArrayNode array = objectMapper.createArrayNode();
-            for (ChatMessage msg : messages) {
-                array.add(serializeMessage(msg));
+    private void initializeListFromLegacyIfNeeded() throws Exception {
+        List<String> current = redisTemplate.opsForList().range(listKey, 0, 0);
+        if (current != null && !current.isEmpty()) return;
+        String lockKey = listKey + ":init-lock";
+        String token = UUID.randomUUID().toString();
+        Boolean acquired = redisTemplate.opsForValue().setIfAbsent(lockKey, token, Duration.ofSeconds(10));
+        if (!Boolean.TRUE.equals(acquired)) {
+            for (int i = 0; i < 20; i++) {
+                current = redisTemplate.opsForList().range(listKey, 0, 0);
+                if (current != null && !current.isEmpty()) return;
+                Thread.sleep(10);
             }
-            String json = objectMapper.writeValueAsString(array);
-            if (ttlSeconds > 0) {
-                redisTemplate.opsForValue().set(redisKey, json, ttlSeconds, TimeUnit.SECONDS);
-            } else {
-                redisTemplate.opsForValue().set(redisKey, json);
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to save chat memory to Redis", e);
+            return;
         }
+        try {
+            current = redisTemplate.opsForList().range(listKey, 0, 0);
+            if (current != null && !current.isEmpty()) return;
+            String legacyJson = redisTemplate.opsForValue().get(redisKey);
+            if (legacyJson != null && !legacyJson.isEmpty()) {
+                List<String> entries = legacyEntries(legacyJson);
+                if (!entries.isEmpty()) {
+                    redisTemplate.opsForList().rightPushAll(listKey, entries);
+                    redisTemplate.opsForList().trim(listKey, Math.max(0, entries.size() - maxMessages), -1);
+                    if (ttlSeconds > 0) redisTemplate.expire(listKey, ttlSeconds, TimeUnit.SECONDS);
+                }
+                redisTemplate.delete(redisKey);
+            }
+        } finally {
+            redisTemplate.execute(RELEASE_LOCK_SCRIPT, List.of(lockKey), token);
+        }
+    }
+
+    private List<String> legacyEntries(String json) throws Exception {
+        ArrayNode array = (ArrayNode) objectMapper.readTree(json);
+        List<String> entries = new ArrayList<>();
+        for (JsonNode node : array) entries.add(objectMapper.writeValueAsString(node));
+        return entries;
     }
 
     private ObjectNode serializeMessage(ChatMessage msg) {

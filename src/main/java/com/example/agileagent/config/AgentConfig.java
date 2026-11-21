@@ -40,11 +40,12 @@ public class AgentConfig {
         return new ChatMemoryProvider() {
             @Override
             public ChatMemory get(Object memoryId) {
-                ChatMemory inner = new RedisChatMemory(memoryId, redisTemplate, objectMapper,
+                Object storageMemoryId = ProjectScope.storageMemoryId(memoryId);
+                ChatMemory inner = new RedisChatMemory(storageMemoryId, redisTemplate, objectMapper,
                         maxMessages, ttlSeconds, keyPrefix);
 
                 // 装饰器：在消息列表前自动注入用户画像
-                return new ChatMemoryDecorator(inner, memoryId, redisTemplate);
+                return new ChatMemoryDecorator(inner, storageMemoryId, redisTemplate);
             }
         };
     }

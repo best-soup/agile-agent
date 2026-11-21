@@ -14,6 +14,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -116,6 +120,42 @@ class TaskDraftServiceTests {
             assertThrows(IllegalArgumentException.class, () -> drafts.updateItem(10L, draft.draft().getId(), draft.items().get(0).getId(), new UpdateTaskDraftItemRequest("x", null, null, "URGENT", null, 0)));
             assertThrows(IllegalArgumentException.class, () -> drafts.updateItem(10L, draft.draft().getId(), draft.items().get(0).getId(), new UpdateTaskDraftItemRequest("x", null, null, "LOW", "2026-02-30", 0)));
         });
+    }
+
+    @Test
+    void concurrentSubmitOfSameDraftCreatesOneTask() throws Exception {
+        var draft = ProjectScope.runAs(2L, 10L, () -> drafts.createFromMeeting(10L,
+                new CreateTaskDraftRequest("并发纪要", null), List.of(task("只创建一次", "MEDIUM"))));
+        ProjectScope.runAs(2L, 10L, () -> drafts.confirm(10L, draft.draft().getId()));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<Object>> results = List.of(
+                    pool.submit(() -> submitConcurrently(start, draft.draft().getId())),
+                    pool.submit(() -> submitConcurrently(start, draft.draft().getId())));
+            start.countDown();
+            int stateConflicts = 0;
+            for (Future<Object> future : results) {
+                try {
+                    future.get();
+                } catch (java.util.concurrent.ExecutionException exception) {
+                    assertInstanceOf(DraftStateException.class, exception.getCause());
+                    stateConflicts++;
+                }
+            }
+            assertTrue(stateConflicts <= 1);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertEquals(1, countTasks(10));
+        assertEquals(TaskDraftService.SUBMITTED, ProjectScope.runAs(2L, 10L,
+                () -> drafts.get(10L, draft.draft().getId()).draft().getStatus()));
+    }
+
+    private Object submitConcurrently(CountDownLatch start, Long draftId) throws Exception {
+        start.await();
+        return ProjectScope.runAs(2L, 10L,
+                () -> drafts.submit(10L, draftId, new SubmitTaskDraftRequest("same-key")));
     }
 
     private CreateTaskRequest task(String title, String priority) {

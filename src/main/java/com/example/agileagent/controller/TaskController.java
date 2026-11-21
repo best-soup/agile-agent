@@ -3,6 +3,7 @@ package com.example.agileagent.controller;
 import com.example.agileagent.agent.AgileMasterAgent;
 import com.example.agileagent.agent.ManualReActAgent;
 import com.example.agileagent.config.ProjectScope;
+import com.example.agileagent.dto.ApiErrorResponse;
 import com.example.agileagent.dto.CreateTaskDraftRequest;
 import com.example.agileagent.dto.CreateTaskRequest;
 import com.example.agileagent.dto.TaskDraftResponse;
@@ -11,11 +12,16 @@ import com.example.agileagent.service.ProjectAccessService;
 import com.example.agileagent.service.TaskDraftService;
 import dev.langchain4j.service.TokenStream;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 @RestController
 @RequestMapping("/api/task")
@@ -35,6 +41,13 @@ public class TaskController {
 
     @Autowired
     private TaskDraftService taskDraftService;
+
+    @Autowired
+    @Qualifier("sseTaskExecutor")
+    private ThreadPoolTaskExecutor sseTaskExecutor;
+
+    @Value("${agile.sse.timeout-ms:300000}")
+    private long sseTimeoutMs;
 
     /**
      * 接收会议纪要并提取为待人工确认的任务草稿
@@ -121,34 +134,44 @@ public class TaskController {
     ) {
         requireMessage(userMessage);
         System.out.println("收到聊天消息（流式）...");
-        SseEmitter emitter = new SseEmitter(300_000L); // 5 分钟超时
+        SseEmitter emitter = new SseEmitter(sseTimeoutMs);
+        AtomicBoolean finished = new AtomicBoolean(false);
+        AtomicReference<ProjectScope.Context> contextRef = new AtomicReference<>();
 
         TokenStream tokenStream = ProjectScope.runInProject(projectId,
                 () -> {
                     projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
+                    contextRef.set(ProjectScope.capture());
                     return agileMasterAgent.chatStream(memoryId(projectId), userMessage);
                 });
 
         tokenStream.onPartialResponse(token -> {
+            if (finished.get()) return;
             try {
                 emitter.send(token);
             } catch (IOException e) {
-                emitter.completeWithError(e);
+                completeStreamError(emitter, finished, contextRef.get(), "客户端连接已断开");
             }
         });
 
-        tokenStream.onCompleteResponse(response -> emitter.complete());
+        tokenStream.onCompleteResponse(response -> completeStream(emitter, finished));
 
-        tokenStream.onError(emitter::completeWithError);
+        tokenStream.onError(error -> completeStreamError(emitter, finished, contextRef.get(), "流式请求失败"));
+        emitter.onCompletion(() -> finished.set(true));
+        emitter.onTimeout(() -> completeStreamError(emitter, finished, contextRef.get(), "流式请求超时"));
+        emitter.onError(error -> finished.set(true));
 
-        Long userId = ProjectScope.requireUserId();
-        new Thread(() -> ProjectScope.runAs(userId, projectId, tokenStream::start)).start();
+        try {
+            sseTaskExecutor.execute(() -> ProjectScope.runWith(contextRef.get(), tokenStream::start));
+        } catch (RuntimeException rejected) {
+            completeStreamError(emitter, finished, contextRef.get(), "流式请求繁忙，请稍后重试");
+        }
 
         return emitter;
     }
 
     private String memoryId(Long projectId) {
-        return ProjectScope.requireUserId() + ":" + projectId;
+        return ProjectScope.encodeMemoryId(projectId);
     }
 
     private TaskDraftResponse createDraft(Long projectId, String meetingText, String sourceRef) {
@@ -170,6 +193,24 @@ public class TaskController {
     private void requireMessage(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {
             throw new IllegalArgumentException("消息内容不能为空");
+        }
+    }
+
+    private void completeStream(SseEmitter emitter, AtomicBoolean finished) {
+        if (finished.compareAndSet(false, true)) emitter.complete();
+    }
+
+    private void completeStreamError(SseEmitter emitter, AtomicBoolean finished,
+                                     ProjectScope.Context context, String message) {
+        if (!finished.compareAndSet(false, true)) return;
+        try {
+            String requestId = context == null ? null : context.requestId();
+            emitter.send(SseEmitter.event().name("error")
+                    .data(ApiErrorResponse.of("INTERNAL_ERROR", message, requestId)));
+        } catch (Exception ignored) {
+            // The client may already have closed the stream.
+        } finally {
+            emitter.complete();
         }
     }
 

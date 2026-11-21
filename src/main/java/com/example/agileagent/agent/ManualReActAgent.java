@@ -1,6 +1,7 @@
 package com.example.agileagent.agent;
 
 import com.example.agileagent.config.ManualChatMemoryStore;
+import com.example.agileagent.config.ProjectScope;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -255,7 +256,7 @@ public class ManualReActAgent {
                 "查询指定项目下的所有工单任务，返回工单列表（含ID、标题、负责人、优先级、截止日期、完成状态）",
                 b -> b.addIntegerProperty("projectId", "项目ID")
                       .required("projectId"),
-                (projectId, args) -> taskTools.queryTasks(args.get("projectId").asLong()));
+                (projectId, args) -> taskTools.queryTasks(args.get("projectId").asLong(), ProjectScope.encodeMemoryId(projectId)));
 
         register("queryByAssignee",
                 "按负责人姓名查询项目下的工单，返回该负责人名下的所有工单",
@@ -264,7 +265,7 @@ public class ManualReActAgent {
                       .required("projectId", "assigneeName"),
                 (projectId, args) -> taskTools.queryByAssignee(
                         args.get("projectId").asLong(),
-                        args.get("assigneeName").asText()));
+                        args.get("assigneeName").asText(), ProjectScope.encodeMemoryId(projectId)));
 
         register("createTask",
                 "在指定项目下创建新的工单任务（默认 MEDIUM 优先级），返回创建成功的工单ID",
@@ -277,7 +278,7 @@ public class ManualReActAgent {
                         args.get("projectId").asLong(),
                         args.get("title").asText(),
                         args.get("assigneeName").asText(),
-                        args.get("description").asText()));
+                        args.get("description").asText(), ProjectScope.encodeMemoryId(projectId)));
 
         register("createTaskFull",
                 "创建带完整字段的工单任务（含优先级和截止日期）",
@@ -294,7 +295,7 @@ public class ManualReActAgent {
                         args.get("assigneeName").asText(),
                         args.get("description").asText(),
                         args.get("priority").asText(),
-                        args.get("deadlineStr").asText()));
+                        args.get("deadlineStr").asText(), ProjectScope.encodeMemoryId(projectId)));
 
         register("updateTaskPriority",
                 "更新指定工单的优先级",
@@ -303,21 +304,21 @@ public class ManualReActAgent {
                       .required("taskId", "newPriority"),
                 (projectId, args) -> taskTools.updateTaskPriority(
                         args.get("taskId").asLong(),
-                        args.get("newPriority").asText()));
+                        args.get("newPriority").asText(), ProjectScope.encodeMemoryId(projectId)));
 
         register("markTaskComplete",
                 "将指定工单标记为已完成",
                 b -> b.addIntegerProperty("taskId", "工单ID")
                       .required("taskId"),
                 (projectId, args) -> taskTools.markTaskComplete(
-                        args.get("taskId").asLong()));
+                        args.get("taskId").asLong(), ProjectScope.encodeMemoryId(projectId)));
 
         register("deleteTask",
                 "删除指定工单",
                 b -> b.addIntegerProperty("taskId", "工单ID")
                       .required("taskId"),
                 (projectId, args) -> taskTools.deleteTask(
-                        args.get("taskId").asLong()));
+                        args.get("taskId").asLong(), ProjectScope.encodeMemoryId(projectId)));
 
         // ── KnowledgeTools ──
         register("searchKnowledge",
@@ -327,7 +328,7 @@ public class ManualReActAgent {
                       .required("projectId", "query"),
                 (projectId, args) -> knowledgeTools.searchKnowledge(
                         args.get("projectId").asLong(),
-                        args.get("query").asText()));
+                        args.get("query").asText(), ProjectScope.encodeMemoryId(projectId)));
 
         // ── UserProfileTools ──
         register("rememberUserFact",
@@ -337,14 +338,14 @@ public class ManualReActAgent {
                       .required("projectId", "fact"),
                 (projectId, args) -> userProfileTools.rememberUserFact(
                         args.get("projectId").asLong(),
-                        args.get("fact").asText()));
+                        args.get("fact").asText(), ProjectScope.encodeMemoryId(projectId)));
 
         register("getUserProfile",
                 "查看当前已记住的用户画像信息",
                 b -> b.addIntegerProperty("projectId", "项目ID")
                       .required("projectId"),
                 (projectId, args) -> userProfileTools.getUserProfile(
-                        args.get("projectId").asLong()));
+                        args.get("projectId").asLong(), ProjectScope.encodeMemoryId(projectId)));
 
         log.info("ManualReActAgent 已注册 {} 个 Tool", toolDispatcher.size());
     }

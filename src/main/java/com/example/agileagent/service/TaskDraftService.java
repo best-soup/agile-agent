@@ -149,17 +149,28 @@ public class TaskDraftService {
         String key = request == null ? null : request.idempotencyKey();
         if (key == null || key.isBlank() || key.length() > 100) throw new IllegalArgumentException("idempotencyKey 不能为空且不能超过 100 个字符");
         if (SUBMITTED.equals(existing.getStatus()) && key.equals(existing.getIdempotencyKey())) return get(projectId, draftId);
-        if (SUBMITTING.equals(existing.getStatus())) throw new DraftStateException("草稿正在提交");
-        if (CANCELLED.equals(existing.getStatus())) throw new DraftStateException("已取消草稿不能提交");
-        if (!CONFIRMED.equals(existing.getStatus()) && !FAILED.equals(existing.getStatus()))
-            throw new DraftStateException("草稿必须先人工确认后才能提交");
         if (existing.getIdempotencyKey() != null && !key.equals(existing.getIdempotencyKey())) throw new DraftStateException("草稿已使用其他提交键");
-        transactionTemplate.executeWithoutResult(status -> {
-            draftMapper.update(null, new LambdaUpdateWrapper<TaskDraftEntity>().eq(TaskDraftEntity::getId, draftId)
-                    .set(TaskDraftEntity::getStatus, SUBMITTING).set(TaskDraftEntity::getIdempotencyKey, key)
-                    .set(TaskDraftEntity::getFailureReason, null).set(TaskDraftEntity::getUpdatedAt, LocalDateTime.now()));
+        Boolean claimed = transactionTemplate.execute(status -> {
+            LambdaUpdateWrapper<TaskDraftEntity> claim = new LambdaUpdateWrapper<TaskDraftEntity>()
+                    .eq(TaskDraftEntity::getId, draftId).eq(TaskDraftEntity::getProjectId, projectId)
+                    .in(TaskDraftEntity::getStatus, CONFIRMED, FAILED)
+                    .and(q -> q.isNull(TaskDraftEntity::getIdempotencyKey)
+                            .or().eq(TaskDraftEntity::getIdempotencyKey, key))
+                    .set(TaskDraftEntity::getStatus, SUBMITTING)
+                    .set(TaskDraftEntity::getIdempotencyKey, key)
+                    .set(TaskDraftEntity::getFailureReason, null)
+                    .set(TaskDraftEntity::getUpdatedAt, LocalDateTime.now());
+            if (draftMapper.update(null, claim) != 1) return false;
             audit(projectId, ProjectScope.requireUserId(), "DRAFT_SUBMITTING", "TASK_DRAFT", draftId, requestId(), "idempotencyKey=" + key);
+            return true;
         });
+        if (!Boolean.TRUE.equals(claimed)) {
+            TaskDraftEntity current = requireDraft(projectId, draftId);
+            if (SUBMITTED.equals(current.getStatus()) && key.equals(current.getIdempotencyKey())) return get(projectId, draftId);
+            if (SUBMITTING.equals(current.getStatus())) throw new DraftStateException("草稿正在提交");
+            if (CANCELLED.equals(current.getStatus())) throw new DraftStateException("已取消草稿不能提交");
+            throw new DraftStateException("草稿必须先人工确认后才能提交");
+        }
         try {
             return transactionTemplate.execute(status -> {
                 TaskDraftEntity draft = requireDraft(projectId, draftId);
@@ -168,15 +179,20 @@ public class TaskDraftService {
                 List<CreateTaskRequest> requests = items.stream().map(item -> new CreateTaskRequest(item.getTitle(), item.getAssigneeName(), item.getDescription(), item.getPriority(), item.getDeadline() == null ? null : item.getDeadline().toString())).toList();
                 List<Long> ids = taskIssueService.createTasksFromDraft(projectId, requests);
                 LocalDateTime now = LocalDateTime.now();
-                draftMapper.update(null, new LambdaUpdateWrapper<TaskDraftEntity>().eq(TaskDraftEntity::getId, draftId)
+                int completed = draftMapper.update(null, new LambdaUpdateWrapper<TaskDraftEntity>()
+                        .eq(TaskDraftEntity::getId, draftId).eq(TaskDraftEntity::getProjectId, projectId)
+                        .eq(TaskDraftEntity::getStatus, SUBMITTING).eq(TaskDraftEntity::getIdempotencyKey, key)
                         .set(TaskDraftEntity::getStatus, SUBMITTED).set(TaskDraftEntity::getSubmittedTaskIds, ids.stream().map(String::valueOf).collect(Collectors.joining(",")))
                         .set(TaskDraftEntity::getSubmittedAt, now).set(TaskDraftEntity::getUpdatedAt, now));
+                if (completed != 1) throw new DraftStateException("草稿提交状态已被其他请求改变");
                 audit(projectId, ProjectScope.requireUserId(), "DRAFT_SUBMITTED", "TASK_DRAFT", draftId, requestId(), "idempotencyKey=" + key + ";taskIds=" + ids);
                 return get(projectId, draftId);
             });
         } catch (RuntimeException exception) {
             transactionTemplate.executeWithoutResult(status -> {
                 draftMapper.update(null, new LambdaUpdateWrapper<TaskDraftEntity>().eq(TaskDraftEntity::getId, draftId)
+                        .eq(TaskDraftEntity::getProjectId, projectId).eq(TaskDraftEntity::getStatus, SUBMITTING)
+                        .eq(TaskDraftEntity::getIdempotencyKey, key)
                         .set(TaskDraftEntity::getStatus, FAILED)
                         .set(TaskDraftEntity::getFailureReason, "任务批量提交失败，请检查任务数据后重试")
                         .set(TaskDraftEntity::getUpdatedAt, LocalDateTime.now()));
