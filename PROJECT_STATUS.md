@@ -33,7 +33,7 @@
 | Agent 能力 | 70% | 有 Tool Calling、手写 ReAct、工具轨迹和错误回传 |
 | RAG 能力 | 55% | 有索引、分块、Embedding 和 Qdrant，但检索隔离和质量保障仍需加强 |
 | Java 后端工程 | 60% | 已具备项目权限隔离、任务事务、草稿确认、幂等提交、审计、API Key 生命周期、统一错误响应和基础并发控制；真实分布式环境仍待验证 |
-| 测试与交付 | 20% | 已有 Spring 启动测试和权限边界单测，缺少真实依赖集成测试和一键部署环境 |
+| 测试与交付 | 25% | 已有本地回归测试和可执行真实 E2E 验收脚本；真实依赖链路仍待隔离环境执行 |
 | 生产可用性 | 30% | 可以演示和面试展示，不适合直接处理真实业务数据 |
 
 综合判断：
@@ -80,7 +80,7 @@ LangChain4j Tool 边界使用 `@ToolMemoryId` 接收带上下文的 Agent memory
 
 ### 5. 测试和交付材料不足
 
-仓库缺少 README、Docker Compose、测试数据和完整接口说明；数据库结构已通过 Flyway 管理，并保留可重复执行的手工初始化脚本 `src/main/resources/db/schema.sql`。`notes/`、`local-benchmarks/` 和 `demo-data/` 被 `.gitignore` 排除，实验记录和评估数据不会随 Git 交付。
+仓库已增加 `scripts/e2e-smoke.ps1` 和 `E2E_ACCEPTANCE.md`，用于隔离的真实 MySQL、Redis、Qdrant、DashScope 和 Spring Boot 验收；脚本不会记录密钥或完整业务文本，也不会连接现有 `agile_agent_db`。数据库结构已通过 Flyway 管理，并保留可重复执行的手工初始化脚本 `src/main/resources/db/schema.sql`。`notes/`、`local-benchmarks/`、`demo-data/` 和 `e2e-artifacts/` 被 `.gitignore` 排除。
 
 ### 数据库迁移与初始化
 
@@ -136,6 +136,16 @@ LangChain4j Tool 边界使用 `@ToolMemoryId` 接收带上下文的 Agent memory
 2. 修复 Redis 并发读改写问题，或改为原子追加/按消息存储。
 3. 使用受控线程池重做 SSE 生命周期。
 4. 已增加统一错误响应、字段校验、requestId 响应头/MDC 关联、安全认证错误输出、受控 SSE 线程池、Redis 原子记忆追加、Tool 上下文恢复和草稿提交竞态保护。
+
+### 真实端到端验收状态
+
+- 已准备：`scripts/e2e-smoke.ps1`、`E2E_ACCEPTANCE.md`、可选 `RealStreamToolContextIntegrationTest`。
+- 已执行：本地 `mvn test`，33 项测试通过、1 项真实环境测试因缺少环境变量跳过；不依赖外部服务。
+- 已执行真实主流程：使用隔离库 `agile_agent_e2e_20261121` 完成 MySQL、Redis、Qdrant 连通性、用户/项目/Viewer、会议草稿生成、编辑/删除、确认、幂等提交、正式任务、跨项目隔离、撤销/过期 Key、RAG 检索和审计查询；脱敏报告见 `e2e-artifacts/e2e-report-20261121-211225.md`。
+- 已执行真实 SSE 集成测试：`RealStreamToolContextIntegrationTest` 通过；响应包含真实 `task_issue` 任务，日志出现 `task_issue` 查询、`Agent tool context restored ... requestId=...`，且未出现缺少用户上下文。
+- 测试脚本已修复 PowerShell `$Host` 参数冲突、撤销/过期断言参数错误，并让真实 SSE 测试显式绑定隔离 MySQL、MySQL 驱动和 DashScope 配置，按 SSE 分片拼接后校验任务标题。
+- 未完成：Redis 用户/项目隔离检查因本机没有 `redis-cli` 跳过；停止服务、Qdrant/数据库故障、模型失败、SSE 客户端主动断开和超时仍需人工执行。
+- 本轮应用和测试均指向隔离库，没有连接或修改现有 `agile_agent_db`；未把凭证、完整 Authorization Header 或会议原文写入仓库。
 
 ### 第三优先级：可验证和可交付
 
