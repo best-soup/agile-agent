@@ -1,6 +1,8 @@
 package com.example.agileagent.controller;
 
 import com.example.agileagent.service.TaskNotFoundException;
+import com.example.agileagent.service.DraftNotFoundException;
+import com.example.agileagent.service.DraftStateException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -10,6 +12,16 @@ import java.util.Map;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(DraftNotFoundException.class)
+    public ResponseEntity<Map<String, String>> draftNotFound(DraftNotFoundException exception) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", exception.getMessage()));
+    }
+
+    @ExceptionHandler(DraftStateException.class)
+    public ResponseEntity<Map<String, String>> draftConflict(DraftStateException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", exception.getMessage()));
+    }
 
     @ExceptionHandler(TaskNotFoundException.class)
     public ResponseEntity<Map<String, String>> taskNotFound(TaskNotFoundException exception) {

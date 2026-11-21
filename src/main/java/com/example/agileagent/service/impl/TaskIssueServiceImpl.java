@@ -146,6 +146,16 @@ public class TaskIssueServiceImpl implements TaskIssueService {
         tasks.forEach(mapper::insert);
     }
 
+    @Override
+    @Transactional
+    public List<Long> createTasksFromDraft(Long projectId, List<CreateTaskRequest> requests) {
+        access.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
+        if (requests == null || requests.isEmpty()) throw new IllegalArgumentException("草稿没有任务项");
+        List<TaskIssueEntity> tasks = requests.stream().map(request -> newTask(projectId, request)).toList();
+        tasks.forEach(mapper::insert);
+        return tasks.stream().map(TaskIssueEntity::getId).toList();
+    }
+
     private TaskIssueEntity newTask(Long projectId, CreateTaskRequest request) {
         if (request == null) throw new IllegalArgumentException("请求不能为空");
         validateAssignee(request.assigneeName());

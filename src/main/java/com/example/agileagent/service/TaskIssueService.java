@@ -18,4 +18,5 @@ public interface TaskIssueService {
     TaskIssueEntity setCompleted(Long projectId, Long taskId, boolean completed);
     TaskIssueEntity deleteTask(Long projectId, Long taskId);
     void saveIssuesFromAi(Long projectId, List<TaskIssueDTO> aiExtractedIssues);
+    List<Long> createTasksFromDraft(Long projectId, List<CreateTaskRequest> requests);
 }
