@@ -59,6 +59,11 @@ public class TaskDraftService {
 
     public TaskDraftResponse createFromMeeting(Long projectId, CreateTaskDraftRequest request,
                                                List<CreateTaskRequest> items) {
+        return createFromMeeting(projectId, request, items, "MEETING");
+    }
+
+    public TaskDraftResponse createFromMeeting(Long projectId, CreateTaskDraftRequest request,
+                                               List<CreateTaskRequest> items, String sourceType) {
         access.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
         if (request == null || request.meetingText() == null || request.meetingText().isBlank())
             throw new IllegalArgumentException("会议纪要不能为空");
@@ -67,7 +72,7 @@ public class TaskDraftService {
         Long userId = ProjectScope.requireUserId();
         LocalDateTime now = LocalDateTime.now();
         TaskDraftEntity draft = TaskDraftEntity.builder().projectId(projectId).createdBy(userId)
-                .sourceType("MEETING").sourceRef(request.sourceRef())
+                .sourceType(sourceType).sourceRef(request.sourceRef())
                 .sourceContentHash(sha256(request.meetingText())).status(DRAFT)
                 .createdAt(now).updatedAt(now).build();
         return transactionTemplate.execute(status -> {

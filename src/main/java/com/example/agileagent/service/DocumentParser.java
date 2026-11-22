@@ -3,8 +3,8 @@ package com.example.agileagent.service;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 
-import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -42,10 +42,15 @@ public class DocumentParser {
      * 解析 Word .docx 文件，提取所有段落文本，用双换行分隔。
      */
     public static String parseDocx(Path filePath) throws IOException {
+        try (InputStream input = Files.newInputStream(filePath)) {
+            return parseDocx(input);
+        }
+    }
+
+    public static String parseDocx(InputStream input) throws IOException {
         List<String> paragraphs = new ArrayList<>();
 
-        try (FileInputStream fis = new FileInputStream(filePath.toFile());
-             XWPFDocument doc = new XWPFDocument(fis)) {
+        try (XWPFDocument doc = new XWPFDocument(input)) {
 
             for (XWPFParagraph para : doc.getParagraphs()) {
                 String text = para.getText();

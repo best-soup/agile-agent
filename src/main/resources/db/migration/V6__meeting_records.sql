@@ -1,0 +1,21 @@
+CREATE TABLE meeting_record (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    project_id BIGINT NOT NULL,
+    source_type VARCHAR(30) NOT NULL,
+    source_id VARCHAR(255) NOT NULL,
+    identity_hash CHAR(64) NOT NULL,
+    title VARCHAR(255),
+    content LONGTEXT NOT NULL,
+    content_hash CHAR(64) NOT NULL,
+    source_url VARCHAR(500),
+    meeting_date DATE,
+    imported_by BIGINT NOT NULL,
+    index_status VARCHAR(20) NOT NULL,
+    index_failure_reason VARCHAR(255),
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_meeting_project_identity (project_id, identity_hash),
+    INDEX idx_meeting_project_created (project_id, created_at),
+    CONSTRAINT fk_meeting_project FOREIGN KEY (project_id) REFERENCES agile_project(id),
+    CONSTRAINT fk_meeting_importer FOREIGN KEY (imported_by) REFERENCES app_user(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

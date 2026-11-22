@@ -8,6 +8,8 @@ import com.example.agileagent.service.ApiKeyStateException;
 import com.example.agileagent.service.DraftNotFoundException;
 import com.example.agileagent.service.DraftStateException;
 import com.example.agileagent.service.TaskNotFoundException;
+import com.example.agileagent.service.MeetingImportException;
+import com.example.agileagent.service.MeetingRecordNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
@@ -24,12 +26,34 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 import java.util.List;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(MeetingImportException.class)
+    public ResponseEntity<ApiErrorResponse> meetingImport(MeetingImportException e, HttpServletRequest request) {
+        return error(HttpStatus.BAD_REQUEST, "MEETING_IMPORT_INVALID", e.getMessage(), request);
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiErrorResponse> uploadTooLarge(MaxUploadSizeExceededException e, HttpServletRequest request) {
+        return error(HttpStatus.PAYLOAD_TOO_LARGE, "MEETING_IMPORT_INVALID", "文件超过 5 MB", request);
+    }
+
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<ApiErrorResponse> missingUpload(MissingServletRequestPartException e, HttpServletRequest request) {
+        return error(HttpStatus.BAD_REQUEST, "MEETING_IMPORT_INVALID", "缺少上传文件", request);
+    }
+
+    @ExceptionHandler(MeetingRecordNotFoundException.class)
+    public ResponseEntity<ApiErrorResponse> meetingNotFound(MeetingRecordNotFoundException e, HttpServletRequest request) {
+        return error(HttpStatus.NOT_FOUND, "MEETING_RECORD_NOT_FOUND", "当前项目中不存在该会议记录", request);
+    }
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ApiErrorResponse> resourceConflict(DataIntegrityViolationException e, HttpServletRequest request) {

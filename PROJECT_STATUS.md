@@ -14,6 +14,7 @@
 
 ## 当前已实现能力
 
+- 支持项目范围内的会议文本、TXT、Markdown 和 DOCX 导入，保存会议记录后同步尝试 RAG 索引，再由用户显式生成任务草稿。
 - 使用 LangChain4j 接入千问 Plus，支持声明式 `@AiService`。
 - 使用 Function Calling 实现工单查询、创建、修改、完成和删除。
 - 实现手写 ReAct 循环，支持 Reasoning、Tool Calling、Observation 和最大步数保护。
@@ -101,6 +102,7 @@ LangChain4j Tool 边界使用 `@ToolMemoryId` 接收带上下文的 Agent memory
 - `V3__task_drafts_and_audit.sql` 新增任务草稿、草稿项和审计日志表，不修改已执行的 V1/V2。
 - `V4__api_key_lifecycle.sql` 新增独立 API Key 表，并把已有 `app_user.api_key_hash` 回填为 ACTIVE Key；旧列改为可空并进入弃用期，不影响已有用户和项目关系。
 - `V5__rag_documents.sql` 新增 RAG 文档身份、版本、状态和失败原因表，不修改任务、权限和 API Key 表。
+- `V6__meeting_records.sql` 新增会议记录表，保存项目、来源、内容哈希、导入用户、索引状态和时间。
 - `spring.flyway.baseline-on-migrate=true` 兼容已有无 Flyway 历史的数据库：已有表会建立版本 1 基线，然后执行 V2；全新数据库会依次执行 V1、V2。
 - Flyway 禁止 `clean`。重复启动只执行未完成的版本迁移，不删除表、不清空数据。
 
@@ -108,7 +110,25 @@ LangChain4j Tool 边界使用 `@ToolMemoryId` 接收带上下文的 Agent memory
 
 1. 创建空的 `agile_agent_db` 数据库。
 2. 设置 `DB_PASSWORD`，启动 Spring Boot：`.\mvnw.cmd spring-boot:run`。
-3. Flyway 自动创建九张业务表并补索引、外键。
+3. Flyway 自动执行迁移，创建业务表并补索引、外键。
+
+### 本地会议导入
+
+需先启动 MySQL、Redis、Qdrant 和应用，并为请求提供项目成员的 Bearer API Key。以下接口均使用当前认证用户及路径中的项目进行权限校验：
+
+```text
+POST /api/projects/{projectId}/meeting-records/text
+POST /api/projects/{projectId}/meeting-records/files
+GET  /api/projects/{projectId}/meeting-records
+GET  /api/projects/{projectId}/meeting-records/{recordId}
+POST /api/projects/{projectId}/meeting-records/{recordId}/task-drafts
+```
+
+文本接口接收 JSON：`title`、`content` 必填，`sourceId`、`sourceUrl`、`meetingDate` 可选。文件接口使用 multipart `file` 字段，支持 UTF-8 TXT、Markdown 和 DOCX，最大 5 MiB，不接收本机路径，也不永久保存上传文件。列表不返回正文；详情返回正文及索引状态。
+
+同一项目、来源类型、来源 ID 和内容哈希相同的导入复用原记录；手工文本未指定来源 ID 时使用内容哈希，文件以清理后的文件名作为来源 ID。内容变化创建新记录。每条记录独立调用 RAG，来源 ID 为 `meeting-record:<id>`；显式生成的草稿使用 `sourceType=MEETING_RECORD` 和同一 `sourceRef`。索引失败时记录保留并返回 `FAILED`；重复导入复用失败记录，本阶段没有重试接口。
+
+VIEWER 可读取，MEMBER 及以上可导入和生成草稿；非成员、跨项目记录访问被拒绝。导入、索引结果和草稿生成写入关联 requestId 的审计日志，不存会议正文。
 
 已有数据库升级：
 
