@@ -73,4 +73,4 @@ Swagger UI：`http://localhost:8080/swagger-ui/index.html`；OpenAPI JSON：`htt
 
 ## 已知限制
 
-尚未接入飞书和前端；外部模型、Qdrant 及异常恢复依赖实际环境验收。API Key 是轻量认证方案，当前系统是原型，不应直接处理生产数据。
+前端是独立的本地演示工作台，启动与安全边界见 [web/README.md](web/README.md)。尚未接入飞书；外部模型、Qdrant 及异常恢复依赖实际环境验收。API Key 是轻量认证方案，当前系统是原型，不应直接处理生产数据。
