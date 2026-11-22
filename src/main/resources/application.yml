@@ -9,15 +9,15 @@ spring:
   # 1. 数据库配置
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/agile_agent_db?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true
-    username: root
+    url: ${DB_URL:jdbc:mysql://localhost:3306/agile_agent_db?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true}
+    username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD}
 
   # 2. Redis 配置
   data:
     redis:
-      host: localhost
-      port: 6379
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
       database: 0
 
   # 3. Flyway 数据库迁移
@@ -83,8 +83,22 @@ logging:
 # 7. Qdrant 向量库配置
 qdrant:
   enabled: true  # true=Qdrant持久化, false=内存（默认）
-  host: localhost
-  port: 6334      # gRPC 端口
-  collection-name: agile-agent-docs
+  host: ${QDRANT_HOST:localhost}
+  port: ${QDRANT_PORT:6334}      # gRPC 端口
+  collection-name: ${QDRANT_COLLECTION:agile-agent-docs}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db,redis
 
 

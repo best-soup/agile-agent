@@ -1,0 +1,40 @@
+name: agile-agent-local
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-agile_agent_compose}
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-13306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-16379}:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    ports:
+      - "127.0.0.1:${QDRANT_HTTP_PORT:-16333}:6333"
+      - "127.0.0.1:${QDRANT_GRPC_PORT:-16334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+volumes:
+  mysql_data:
+  redis_data:
+  qdrant_data:

@@ -29,8 +29,13 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
+        String path = request.getRequestURI().substring(request.getContextPath().length());
+        if ("GET".equalsIgnoreCase(request.getMethod()) && (path.equals("/actuator/health")
+                || path.equals("/actuator/health/liveness") || path.equals("/actuator/health/readiness")
+                || path.equals("/v3/api-docs") || path.startsWith("/v3/api-docs/")
+                || path.equals("/swagger-ui.html") || path.startsWith("/swagger-ui/"))) return true;
         return "POST".equalsIgnoreCase(request.getMethod())
-                && "/api/users".equals(request.getRequestURI());
+                && "/api/users".equals(path);
     }
 
     @Override
