@@ -102,7 +102,7 @@ public class TaskController {
         System.out.println("收到聊天消息...");
         return ProjectScope.runInProject(projectId, () -> {
             projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
-            return agileMasterAgent.chat(memoryId(projectId), userMessage);
+            return agileMasterAgent.chat(memoryId(projectId), projectId, userMessage);
         });
     }
 
@@ -142,7 +142,7 @@ public class TaskController {
                 () -> {
                     projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
                     contextRef.set(ProjectScope.capture());
-                    return agileMasterAgent.chatStream(memoryId(projectId), userMessage);
+                    return agileMasterAgent.chatStream(memoryId(projectId), projectId, userMessage);
                 });
 
         tokenStream.onPartialResponse(token -> {

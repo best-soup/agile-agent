@@ -32,26 +32,32 @@ public class KnowledgeTools {
 
     private String search(Long projectId, String query) {
 
-        projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
+        // The request scope is authoritative; a missing model argument can use it, but a mismatch is rejected.
+        Long trustedProjectId = ProjectScope.currentProjectId();
+        if (trustedProjectId == null) {
+            throw new IllegalStateException("缺少当前项目上下文");
+        }
+        if (projectId != null && !trustedProjectId.equals(projectId)) {
+            throw new SecurityException("请求项目与当前项目上下文不一致");
+        }
+        projectAccessService.requireCurrentProject(trustedProjectId, ProjectAccessService.Permission.READ);
 
-        List<RagService.SearchResult> results = ragService.search(projectId, query, 3);
+        List<RagService.SearchResult> results = ragService.search(trustedProjectId, query, 3);
 
         if (results.isEmpty()) {
-            return "未在项目 " + projectId + " 的历史文档中找到与 \"" + query + "\" 相关的内容。";
+            return "未在项目 " + trustedProjectId + " 的历史文档中找到与 \"" + query + "\" 相关的内容。";
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("在项目 ").append(projectId).append(" 的历史文档中找到以下相关内容：\n\n");
+        sb.append("在项目 ").append(trustedProjectId).append(" 的历史文档中找到以下相关内容：\n\n");
         for (int i = 0; i < results.size(); i++) {
             RagService.SearchResult r = results.get(i);
-            sb.append("【片段 ").append(i + 1).append("】");
-            if (r.title() != null) sb.append(" 文档:").append(r.title());
-            if (r.date() != null) sb.append(" 日期:").append(r.date());
-            sb.append(" 相关度:").append(String.format("%.0f%%", r.score() * 100));
-            sb.append("\n");
-            sb.append(r.text()).append("\n");
-            if (r.source() != null) sb.append("（来源: ").append(r.source()).append("）");
-            sb.append("\n\n");
+            sb.append("【片段 ").append(i + 1).append("】 相关度:")
+                    .append(String.format("%.0f%%", r.score() * 100)).append("\n")
+                    .append("[来源] ").append(r.citationLabel()).append("\n")
+                    .append("[文档ID] ").append(r.documentId() == null ? "未知" : r.documentId()).append("\n")
+                    .append("[片段] ").append(r.chunkIndex() == null ? "未知" : r.chunkIndex()).append("\n")
+                    .append("[内容] ").append(r.text()).append("\n\n");
         }
         return sb.toString();
     }

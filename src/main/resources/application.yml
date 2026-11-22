@@ -34,13 +34,15 @@ langchain4j:
       api-key: ${DASHSCOPE_API_KEY}
       model-name: qwen4-max
       temperature: 0.2
-      timeout: 30s
+      # qwen4-max 在首次工具调用前可能需要超过 30 秒返回；禁用重试，避免写工具重复执行。
+      timeout: 90s
       max-retries: 0
     streaming-chat-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       api-key: ${DASHSCOPE_API_KEY}
       model-name: qwen4-max
-      timeout: 30s
+      # 流式连接也使用同样的模型读取上限；SSE 总时限仍由 agile.sse.timeout-ms 控制。
+      timeout: 90s
       max-retries: 0
     embedding-model:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1

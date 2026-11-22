@@ -68,15 +68,25 @@ SSE 已改为受控 `ThreadPoolTaskExecutor`，设置核心/最大线程数、�
 
 LangChain4j Tool 边界使用 `@ToolMemoryId` 接收带上下文的 Agent memoryId，在 `TaskTools`、知识检索和用户画像 Tool 执行前显式恢复 `userId/projectId/requestId`，执行后清理；不依赖普通 ThreadLocal 自动跨线程传播。ChatMemory 使用规范化后的 `userId:projectId` 存储键，保持原会话隔离语义。
 
-草稿提交使用数据库条件更新抢占 `CONFIRMED/FAILED → SUBMITTING`，两个并发请求不会重复创建正式任务；模型连接/读取超时为 30 秒且关闭自动重试，避免写操作因模型重试重复执行。
+草稿提交使用数据库条件更新抢占 `CONFIRMED/FAILED → SUBMITTING`，两个并发请求不会重复创建正式任务；Chat 模型连接/读取超时为 90 秒、Embedding 为 30 秒且关闭自动重试，避免写操作因模型重试重复执行。
 
 当前仍未在真实 Redis、生产 Servlet 容器和多实例 MySQL 环境验证故障恢复、网络断开和跨实例时序。
 
-### 4. RAG 仍属于实验版本
+### 4. RAG 项目过滤、文档身份和来源引用
 
-当前检索是先从全库取 top-k，再按项目过滤，可能因为其他项目占据 top-k 而丢失当前项目的相关结果。
+当前 RAG 已在 Qdrant 查询阶段使用可信 `ProjectScope.projectId` 的原生 metadata filter，Java 侧保留 projectId 兜底校验；没有通过项目权限检查不会执行检索。`sourceType` 和 `meetingDate` 可作为额外原生过滤条件。
 
-文档重复提交会重复写入向量库；分块逻辑在跨段落 overlap、超长无标点文本和日期清洗方面仍有边界问题。
+普通 `/api/task/chat` 和流式聊天现在会把服务端可信 `projectId` 注入 Agent 用户消息，并把 `ctx|userId|projectId|requestId` memoryId 传入；Knowledge Tool 恢复该上下文后，缺省项目参数使用可信项目，冲突项目直接拒绝，模型不再需要向用户询问项目 ID。
+
+新增 `rag_document`（Flyway V5）记录 `documentId/projectId/sourceType/sourceId/contentHash/version/status/failureReason`。相同项目、来源和内容直接复用 READY 文档；内容变化递增版本，先按稳定 documentId 删除旧 chunks，再使用确定性 point ID upsert 新 chunks；失败会清理已写入 chunks 并标记 FAILED。提供 `deleteDocument` 删除文档记录和全部向量。
+
+每个新 chunk 的 metadata 包含 `projectId/documentId/sourceType/sourceId/title/contentHash/version/chunkIndex/meetingDate/sourceUrl`。检索结果和 Knowledge Tool 输出 `[来源]`、`[文档ID]`、`[片段]`、`[内容]`，旧字段缺失时显示未知，不伪造来源。
+
+已只读检查现有 `agile-agent-docs`：约 703 个 point，旧数据同时存在只有 `projectId` 的会议 chunk 和只有 `docId/type/date` 的历史文档，不能安全推断完整文档身份。不会自动清空或归属这些旧 point；缺失 `projectId` 的旧 point 不会被项目过滤命中，带 `projectId` 但缺少新来源字段的结果会明确显示未知来源。
+
+已在隔离 MySQL `agile_agent_e2e_20261121` 实际启动应用验证 V5：Flyway 从 v4 升级到 v5，`rag_document` 创建成功；未连接现有 `agile_agent_db`。
+
+安全重建方式：创建新的 Qdrant collection（例如 `agile-agent-docs-v2`），将 `qdrant.collection-name` 指向新 collection，按原始脱敏会议/文档逐一重新索引并验证结果后再切换配置；保留旧 collection 作为回滚，不执行 `delete collection` 或全量清空。
 
 ### 5. 测试和交付材料不足
 
@@ -90,6 +100,7 @@ LangChain4j Tool 边界使用 `@ToolMemoryId` 接收带上下文的 Agent memory
 - `V2__Harden_schema.java` 先检查现有四张表和 `task_issue` 的实体字段，再补工单查询索引和必要外键；缺少既有字段时直接失败，不自动猜测或新增业务字段。
 - `V3__task_drafts_and_audit.sql` 新增任务草稿、草稿项和审计日志表，不修改已执行的 V1/V2。
 - `V4__api_key_lifecycle.sql` 新增独立 API Key 表，并把已有 `app_user.api_key_hash` 回填为 ACTIVE Key；旧列改为可空并进入弃用期，不影响已有用户和项目关系。
+- `V5__rag_documents.sql` 新增 RAG 文档身份、版本、状态和失败原因表，不修改任务、权限和 API Key 表。
 - `spring.flyway.baseline-on-migrate=true` 兼容已有无 Flyway 历史的数据库：已有表会建立版本 1 基线，然后执行 V2；全新数据库会依次执行 V1、V2。
 - Flyway 禁止 `clean`。重复启动只执行未完成的版本迁移，不删除表、不清空数据。
 
@@ -97,7 +108,7 @@ LangChain4j Tool 边界使用 `@ToolMemoryId` 接收带上下文的 Agent memory
 
 1. 创建空的 `agile_agent_db` 数据库。
 2. 设置 `DB_PASSWORD`，启动 Spring Boot：`.\mvnw.cmd spring-boot:run`。
-3. Flyway 自动创建八张业务表并补索引、外键。
+3. Flyway 自动创建九张业务表并补索引、外键。
 
 已有数据库升级：
 
@@ -132,7 +143,7 @@ LangChain4j Tool 边界使用 `@ToolMemoryId` 接收带上下文的 Agent memory
 
 ### 第二优先级：基础设施可靠性
 
-1. 为 RAG 增加向量库原生 metadata filter、文档 ID、去重和来源引用。
+1. 已为 RAG 增加向量库原生 metadata filter、文档 ID、去重和来源引用；旧 collection 重建仍需按新 collection 方案人工执行。
 2. 修复 Redis 并发读改写问题，或改为原子追加/按消息存储。
 3. 使用受控线程池重做 SSE 生命周期。
 4. 已增加统一错误响应、字段校验、requestId 响应头/MDC 关联、安全认证错误输出、受控 SSE 线程池、Redis 原子记忆追加、Tool 上下文恢复和草稿提交竞态保护。
@@ -140,7 +151,7 @@ LangChain4j Tool 边界使用 `@ToolMemoryId` 接收带上下文的 Agent memory
 ### 真实端到端验收状态
 
 - 已准备：`scripts/e2e-smoke.ps1`、`E2E_ACCEPTANCE.md`、可选 `RealStreamToolContextIntegrationTest`。
-- 已执行：本地 `mvn test`，33 项测试通过、1 项真实环境测试因缺少环境变量跳过；不依赖外部服务。
+- 已执行：本地 `mvn test`，41 项测试通过、1 项真实环境测试因缺少环境变量跳过；不依赖外部服务。
 - 已执行真实主流程：使用隔离库 `agile_agent_e2e_20261121` 完成 MySQL、Redis、Qdrant 连通性、用户/项目/Viewer、会议草稿生成、编辑/删除、确认、幂等提交、正式任务、跨项目隔离、撤销/过期 Key、RAG 检索和审计查询；脱敏报告见 `e2e-artifacts/e2e-report-20261121-211225.md`。
 - 已执行真实 SSE 集成测试：`RealStreamToolContextIntegrationTest` 通过；响应包含真实 `task_issue` 任务，日志出现 `task_issue` 查询、`Agent tool context restored ... requestId=...`，且未出现缺少用户上下文。
 - 测试脚本已修复 PowerShell `$Host` 参数冲突、撤销/过期断言参数错误，并让真实 SSE 测试显式绑定隔离 MySQL、MySQL 驱动和 DashScope 配置，按 SSE 分片拼接后校验任务标题。

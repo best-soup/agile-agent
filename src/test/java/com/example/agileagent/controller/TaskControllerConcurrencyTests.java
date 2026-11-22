@@ -37,7 +37,7 @@ class TaskControllerConcurrencyTests {
         ProjectAccessService access = mock(ProjectAccessService.class);
         TokenStream stream = mock(TokenStream.class);
         CountDownLatch started = new CountDownLatch(1);
-        when(agent.chatStream(anyString(), anyString())).thenReturn(stream);
+        when(agent.chatStream(anyString(), anyLong(), anyString())).thenReturn(stream);
         when(stream.onPartialResponse(any())).thenReturn(stream);
         when(stream.onCompleteResponse(any())).thenReturn(stream);
         when(stream.onError(any())).thenReturn(stream);

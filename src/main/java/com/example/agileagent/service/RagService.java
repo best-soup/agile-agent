@@ -9,29 +9,57 @@ import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
+import dev.langchain4j.store.embedding.filter.Filter;
+import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.agileagent.config.ProjectScope;
+import com.example.agileagent.entity.RagDocumentEntity;
+import com.example.agileagent.mapper.RagDocumentMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.net.URI;
+import java.security.MessageDigest;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
 public class RagService {
 
+    private static final Logger log = LoggerFactory.getLogger(RagService.class);
+    private static final String DEFAULT_EMBEDDING_BASE_URL =
+            "https://dashscope.aliyuncs.com/compatible-mode/v1";
+
     private final OpenAiEmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
+    private final RagDocumentMapper documentMapper;
+    private final ProjectAccessService projectAccessService;
+    private final String embeddingHost;
 
     @Autowired
     public RagService(OpenAiEmbeddingModel embeddingModel,
                       @Value("${qdrant.enabled:false}") boolean qdrantEnabled,
                       @Value("${qdrant.host:localhost}") String qdrantHost,
                       @Value("${qdrant.port:6334}") int qdrantPort,
-                      @Value("${qdrant.collection-name:agile-agent-docs}") String collectionName) {
+                      @Value("${qdrant.collection-name:agile-agent-docs}") String collectionName,
+                      RagDocumentMapper documentMapper,
+                      ProjectAccessService projectAccessService,
+                      @Value("${langchain4j.open-ai.embedding-model.base-url:" + DEFAULT_EMBEDDING_BASE_URL + "}") String embeddingBaseUrl) {
         this.embeddingModel = embeddingModel;
+        this.documentMapper = documentMapper;
+        this.projectAccessService = projectAccessService;
+        this.embeddingHost = hostOf(embeddingBaseUrl);
 
         if (qdrantEnabled) {
             this.embeddingStore = CompatibleQdrantEmbeddingStore.compatibleBuilder()
@@ -46,6 +74,15 @@ public class RagService {
             this.embeddingStore = new InMemoryEmbeddingStore<>();
             System.out.println("[RAG] 向量存储: InMemory（重启后数据丢失，设 qdrant.enabled=true 启用持久化）");
         }
+    }
+
+    /** Compatibility constructor used by lightweight unit tests. */
+    public RagService(OpenAiEmbeddingModel embeddingModel,
+                      boolean qdrantEnabled, String qdrantHost, int qdrantPort,
+                      String collectionName, RagDocumentMapper documentMapper,
+                      ProjectAccessService projectAccessService) {
+        this(embeddingModel, qdrantEnabled, qdrantHost, qdrantPort, collectionName,
+                documentMapper, projectAccessService, DEFAULT_EMBEDDING_BASE_URL);
     }
 
     /**
@@ -64,6 +101,17 @@ public class RagService {
      */
     public void indexDocument(Long projectId, String content,
                               String title, String date, String source) {
+        String sourceType = source != null && source.startsWith("api:") ? "MEETING" : "DOCUMENT";
+        String sourceId = source == null || source.isBlank() ? (title == null ? "inline" : title) : source;
+        indexDocument(projectId, content, sourceType, sourceId, title, date, source);
+    }
+
+    /** Indexes one source with a stable identity and deterministic chunk IDs. */
+    @Transactional(noRollbackFor = RuntimeException.class)
+    public void indexDocument(Long projectId, String content, String sourceType, String sourceId,
+                              String title, String meetingDate, String sourceUrl) {
+        projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
+        ProjectScope.requireProjectId(projectId);
         if (content == null || content.isBlank()) return;
 
         // 步骤 1：清洗
@@ -73,15 +121,69 @@ public class RagService {
             return;
         }
 
-        // 步骤 2：分块（元数据随每个块写入）
-        List<TextSegment> segments = splitByParagraph(projectId, cleaned, title, date, source);
-        if (segments.isEmpty()) return;
+        String normalizedSourceType = normalizeSourcePart(sourceType, "DOCUMENT");
+        String normalizedSourceId = normalizeSourcePart(sourceId, "inline");
+        String contentHash = sha256(cleaned);
+        RagDocumentEntity document = findLatestDocument(projectId, normalizedSourceType, normalizedSourceId);
+        if (document != null && contentHash.equals(document.getContentHash()) && "READY".equals(document.getStatus())) {
+            return;
+        }
 
-        // 步骤 3：向量化 + 存储
-        embedAllBatched(segments);
+        LocalDateTime now = LocalDateTime.now();
+        if (document == null || !contentHash.equals(document.getContentHash())) {
+            int version = nextVersion(projectId, normalizedSourceType, normalizedSourceId);
+            document = RagDocumentEntity.builder()
+                    .documentId(stableDocumentId(projectId, normalizedSourceType, normalizedSourceId))
+                    .projectId(projectId).sourceType(normalizedSourceType).sourceId(normalizedSourceId)
+                    .title(title).contentHash(contentHash).version(version).status("INDEXING")
+                    .createdAt(now).updatedAt(now).build();
+            documentMapper.insert(document);
+        } else {
+            document.setTitle(title);
+            document.setContentHash(contentHash);
+            document.setStatus("INDEXING");
+            document.setFailureReason(null);
+            document.setUpdatedAt(now);
+            documentMapper.updateById(document);
+        }
+
+        int segmentCount;
+        try {
+            // 删除同一稳定文档的旧 chunks，避免内容更新留下孤儿向量。
+            embeddingStore.removeAll(CompatibleQdrantEmbeddingStore.documentFilter(projectId, document.getDocumentId()));
+
+            // 步骤 2：分块（每个 chunk 都携带可追溯 metadata）
+            List<TextSegment> segments = splitByParagraph(projectId, cleaned, document,
+                    title, meetingDate, sourceUrl);
+            if (segments.isEmpty()) {
+                throw new IllegalStateException("文档清洗后没有可索引的文本片段");
+            }
+            segmentCount = segments.size();
+
+            // 步骤 3：向量化 + 确定性 point ID upsert
+            embedAllBatched(document, segments);
+            document.setStatus("READY");
+            document.setUpdatedAt(LocalDateTime.now());
+            documentMapper.updateById(document);
+        } catch (RuntimeException exception) {
+            try {
+                embeddingStore.removeAll(CompatibleQdrantEmbeddingStore.documentFilter(projectId, document.getDocumentId()));
+            } catch (RuntimeException ignored) {
+                // Cleanup is best effort; status update below must still be attempted.
+            }
+            try {
+                document.setStatus("FAILED");
+                document.setFailureReason(safeFailure(exception));
+                document.setUpdatedAt(LocalDateTime.now());
+                documentMapper.updateById(document);
+            } catch (RuntimeException ignored) {
+                // Preserve the original indexing error if failure bookkeeping also fails.
+            }
+            throw exception;
+        }
 
         System.out.println("[RAG] 已索引 " + (title != null ? title : "未命名文档")
-                + " | projectId=" + projectId + " | 块数=" + segments.size()
+                + " | documentId=" + document.getDocumentId() + " | projectId=" + projectId + " | 块数=" + segmentCount
                 + " | 原始=" + content.length() + " 清洗后=" + cleaned.length());
     }
 
@@ -98,9 +200,7 @@ public class RagService {
             return;
         }
         indexDocument(projectId, content,
-                fileName.replaceFirst("\\.[^.]+$", ""),
-                null,
-                fileName);
+                "FILE", fileName, fileName.replaceFirst("\\.[^.]+$", ""), null, fileName);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -111,19 +211,32 @@ public class RagService {
      * 语义检索，返回携带完整元数据的结果列表。
      */
     public List<SearchResult> search(Long projectId, String query, int maxResults) {
-        Embedding queryEmbedding = embeddingModel.embed(query).content();
+        return search(projectId, query, maxResults, null, null);
+    }
+
+    /** Optional metadata filters are combined with the mandatory trusted project filter. */
+    public List<SearchResult> search(Long projectId, String query, int maxResults,
+                                     String sourceType, String meetingDate) {
+        projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
+        Long trustedProjectId = ProjectScope.requireProjectId(projectId);
+        Embedding queryEmbedding = embedQuery(query);
+        Filter filter = CompatibleQdrantEmbeddingStore.projectFilter(trustedProjectId);
+        if (sourceType != null && !sourceType.isBlank()) {
+            filter = filter.and(MetadataFilterBuilder.metadataKey("sourceType").isEqualTo(sourceType));
+        }
+        if (meetingDate != null && !meetingDate.isBlank()) {
+            filter = filter.and(MetadataFilterBuilder.metadataKey("meetingDate").isEqualTo(meetingDate));
+        }
         EmbeddingSearchResult<TextSegment> result = embeddingStore.search(
                 EmbeddingSearchRequest.builder()
                         .queryEmbedding(queryEmbedding)
                         .maxResults(maxResults)
+                        .filter(filter)
                         .build());
 
         return result.matches().stream()
                 .filter(m -> m.score() >= 0.7)
-                .filter(m -> {
-                    String sid = m.embedded().metadata().getString("projectId");
-                    return sid != null && sid.equals(projectId.toString());
-                })
+                .filter(m -> trustedProjectId.toString().equals(metadataString(m.embedded().metadata(), "projectId")))
                 .map(m -> SearchResult.from(m.embedded().text(), m.score(), m.embedded().metadata()))
                 .collect(Collectors.toList());
     }
@@ -131,42 +244,65 @@ public class RagService {
     /**
      * 检索结果：文本片段 + 相似度 + 来源元数据。
      */
-    public record SearchResult(String text, double score,
-                                String title, String date, String source) {
+    public record SearchResult(String text, double score, String documentId, String projectId,
+                                String sourceType, String sourceId, String title, Integer chunkIndex,
+                                String meetingDate, String sourceUrl, String contentHash, Integer version,
+                                String citationLabel) {
         static SearchResult from(String text, Double score, Metadata meta) {
+            String documentId = metadataString(meta, "documentId");
+            String projectId = metadataString(meta, "projectId");
+            String sourceType = metadataString(meta, "sourceType");
+            String sourceId = metadataString(meta, "sourceId");
+            String title = metadataString(meta, "title");
+            Integer chunkIndex = metadataInteger(meta, "chunkIndex");
+            String meetingDate = firstMetadata(meta, "meetingDate", "date");
+            String sourceUrl = firstMetadata(meta, "sourceUrl", "source");
+            String contentHash = metadataString(meta, "contentHash");
+            Integer version = metadataInteger(meta, "version");
             return new SearchResult(
                     text,
                     score != null ? score : 0.0,
-                    meta.getString("title"),
-                    meta.getString("date"),
-                    meta.getString("source")
+                    documentId, projectId, sourceType, sourceId, title, chunkIndex,
+                    meetingDate, sourceUrl, contentHash, version,
+                    RagService.citationLabel(sourceType, title, meetingDate, documentId, chunkIndex)
             );
         }
+
+        /** Backward-compatible accessors for existing callers. */
+        public String date() { return meetingDate; }
+        public String source() { return sourceUrl; }
 
         /** 格式化为 Agent 可读的字符串 */
         public String toAgentFormat() {
             StringBuilder sb = new StringBuilder();
-            if (title != null) sb.append("【").append(title).append("】");
-            if (date != null) sb.append(" 日期:").append(date);
-            if (source != null) sb.append(" 来源:").append(source);
-            if (!sb.isEmpty()) sb.append("\n");
-            sb.append(text);
+            sb.append("[来源] ").append(citationLabel).append("\n")
+                    .append("[文档ID] ").append(documentId == null ? "未知" : documentId).append("\n")
+                    .append("[片段] ").append(chunkIndex == null ? "未知" : chunkIndex).append("\n")
+                    .append("[内容] ").append(text);
             return sb.toString();
         }
+    }
+
+    /** Removes one document and all of its chunks within the trusted project. */
+    @Transactional(noRollbackFor = RuntimeException.class)
+    public void deleteDocument(Long projectId, String documentId) {
+        projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
+        Long trustedProjectId = ProjectScope.requireProjectId(projectId);
+        embeddingStore.removeAll(CompatibleQdrantEmbeddingStore.documentFilter(trustedProjectId, documentId));
+        documentMapper.delete(new LambdaQueryWrapper<RagDocumentEntity>()
+                .eq(RagDocumentEntity::getProjectId, trustedProjectId)
+                .eq(RagDocumentEntity::getDocumentId, documentId));
     }
 
     private static final int MAX_CHARS_PER_SEGMENT = 800; // ≈ 512 token（中文 ~1.5 字/token）
     private static final int OVERLAP_CHARS = 100;          // 块间重叠，保上下文连贯
 
-    private List<TextSegment> splitByParagraph(Long projectId, String content,
-                                               String title, String date, String source) {
+    private List<TextSegment> splitByParagraph(Long projectId, String content, RagDocumentEntity document,
+                                               String title, String meetingDate, String sourceUrl) {
         String[] paragraphs = content.split("\\n\\s*\\n");
         List<TextSegment> segments = new ArrayList<>();
-        Metadata meta = Metadata.from("projectId", projectId.toString());
-        if (title != null) meta.put("title", title);
-        if (date != null) meta.put("date", date);
-        if (source != null) meta.put("source", source);
         String overlap = "";
+        int chunkIndex = 0;
 
         for (String p : paragraphs) {
             p = p.trim();
@@ -175,6 +311,22 @@ public class RagService {
             List<String> chunks = splitLongText(p, MAX_CHARS_PER_SEGMENT, OVERLAP_CHARS);
             for (String chunk : chunks) {
                 String text = overlap.isEmpty() ? chunk : overlap + chunk;
+                Metadata meta = Metadata.from("projectId", projectId.toString())
+                        .put("documentId", document.getDocumentId())
+                        .put("sourceType", document.getSourceType())
+                        .put("sourceId", document.getSourceId())
+                        .put("contentHash", document.getContentHash())
+                        .put("version", document.getVersion())
+                        .put("chunkIndex", chunkIndex++);
+                if (title != null) meta.put("title", title);
+                if (meetingDate != null) {
+                    meta.put("meetingDate", meetingDate);
+                    meta.put("date", meetingDate);
+                }
+                if (sourceUrl != null) {
+                    meta.put("sourceUrl", sourceUrl);
+                    meta.put("source", sourceUrl);
+                }
                 segments.add(TextSegment.from(text, meta));
                 overlap = tail(chunk, OVERLAP_CHARS);
             }
@@ -297,14 +449,127 @@ public class RagService {
     }
 
     /** 分批 Embedding，千问 v3 上限 10、v1/v2 上限 25，统一用 8 留余量 */
-    private void embedAllBatched(List<TextSegment> segments) {
+    private void embedAllBatched(RagDocumentEntity document, List<TextSegment> segments) {
         int batchSize = 8;
         for (int i = 0; i < segments.size(); i += batchSize) {
             int end = Math.min(i + batchSize, segments.size());
             List<TextSegment> batch = segments.subList(i, end);
             List<Embedding> embs = embeddingModel.embedAll(batch).content();
-            embeddingStore.addAll(embs, batch);
+            List<String> ids = new ArrayList<>();
+            for (int j = i; j < end; j++) {
+                ids.add(UUID.nameUUIDFromBytes((document.getDocumentId() + ":" + document.getVersion()
+                        + ":" + j).getBytes(StandardCharsets.UTF_8)).toString());
+            }
+            embeddingStore.addAll(ids, embs, batch);
         }
+    }
+
+    private Embedding embedQuery(String query) {
+        long started = System.nanoTime();
+        try {
+            Embedding embedding = embeddingModel.embed(query).content();
+            log.debug("RAG downstream success service=DashScopeEmbedding host={} operation=embed "
+                            + "elapsedMs={} requestId={}", embeddingHost, elapsedMs(started),
+                    ProjectScope.currentRequestId());
+            return embedding;
+        } catch (RuntimeException exception) {
+            log.error("RAG downstream failure service=DashScopeEmbedding host={} operation=embed "
+                            + "elapsedMs={} requestId={} exception={} message={}",
+                    embeddingHost, elapsedMs(started), ProjectScope.currentRequestId(),
+                    exception.getClass().getSimpleName(), safeMessage(exception));
+            throw exception;
+        }
+    }
+
+    private static long elapsedMs(long started) {
+        return (System.nanoTime() - started) / 1_000_000L;
+    }
+
+    private static String hostOf(String baseUrl) {
+        if (baseUrl == null || baseUrl.isBlank()) return "unknown";
+        try {
+            String host = URI.create(baseUrl).getHost();
+            return host == null || host.isBlank() ? "unknown" : host;
+        } catch (IllegalArgumentException ignored) {
+            return "unknown";
+        }
+    }
+
+    private static String safeMessage(Throwable throwable) {
+        String message = throwable.getMessage();
+        if (message == null || message.isBlank()) return "";
+        String oneLine = message.replaceAll("[\\r\\n]+", " ");
+        return oneLine.length() > 240 ? oneLine.substring(0, 240) : oneLine;
+    }
+
+    private RagDocumentEntity findLatestDocument(Long projectId, String sourceType, String sourceId) {
+        return documentMapper.selectList(new LambdaQueryWrapper<RagDocumentEntity>()
+                .eq(RagDocumentEntity::getProjectId, projectId)
+                .eq(RagDocumentEntity::getSourceType, sourceType)
+                .eq(RagDocumentEntity::getSourceId, sourceId)
+                .orderByDesc(RagDocumentEntity::getVersion))
+                .stream().findFirst().orElse(null);
+    }
+
+    private int nextVersion(Long projectId, String sourceType, String sourceId) {
+        return documentMapper.selectList(new LambdaQueryWrapper<RagDocumentEntity>()
+                        .eq(RagDocumentEntity::getProjectId, projectId)
+                        .eq(RagDocumentEntity::getSourceType, sourceType)
+                        .eq(RagDocumentEntity::getSourceId, sourceId)
+                        .orderByDesc(RagDocumentEntity::getVersion))
+                .stream().findFirst().map(d -> d.getVersion() + 1).orElse(1);
+    }
+
+    private static String stableDocumentId(Long projectId, String sourceType, String sourceId) {
+        return "doc-" + sha256(projectId + "|" + sourceType + "|" + sourceId).substring(0, 32);
+    }
+
+    private static String normalizeSourcePart(String value, String fallback) {
+        String normalized = value == null ? "" : value.trim();
+        if (normalized.isEmpty()) return fallback;
+        return normalized.length() <= 500 ? normalized : normalized.substring(0, 500);
+    }
+
+    private static String safeFailure(RuntimeException exception) {
+        String message = exception.getMessage();
+        if (message == null || message.isBlank()) return exception.getClass().getSimpleName();
+        return message.length() > 1000 ? message.substring(0, 1000) : message;
+    }
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception exception) {
+            throw new IllegalStateException("Unable to calculate document content hash", exception);
+        }
+    }
+
+    private static String metadataString(Metadata metadata, String key) {
+        Object value = metadata.toMap().get(key);
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private static Integer metadataInteger(Metadata metadata, String key) {
+        Object value = metadata.toMap().get(key);
+        if (value instanceof Number number) return number.intValue();
+        if (value == null) return null;
+        try { return Integer.valueOf(String.valueOf(value)); } catch (NumberFormatException ignored) { return null; }
+    }
+
+    private static String firstMetadata(Metadata metadata, String first, String fallback) {
+        String value = metadataString(metadata, first);
+        return value == null ? metadataString(metadata, fallback) : value;
+    }
+
+    private static String citationLabel(String sourceType, String title, String date,
+                                        String documentId, Integer chunkIndex) {
+        String label = sourceType == null ? "未知来源" : sourceType;
+        if (title != null && !title.isBlank()) label += " " + title;
+        if (date != null && !date.isBlank()) label += " " + date;
+        if (documentId == null) label += " 文档未知";
+        if (chunkIndex != null) label += " 第 " + chunkIndex + " 段";
+        return label;
     }
 
     private static String tail(String text, int chars) {

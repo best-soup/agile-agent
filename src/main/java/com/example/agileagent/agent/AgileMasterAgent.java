@@ -61,23 +61,28 @@ public interface AgileMasterAgent {
         1. 用户要求操作工单时，直接调用对应工具，不要说你没有这些功能。
         2. 工具返回的工单列表必须逐条完整展示，不要只给摘要或亮点扫描。
         3. 不要编造或修改工具返回的数据。
-        4. 当用户告诉你他的名字、角色、偏好、工作习惯时，用 rememberUserFact 记录下来。
+        4. 当前请求的项目 ID 由服务端可信上下文注入；不要询问用户项目 ID，也不要使用其他项目 ID。
+        5. 当用户告诉你他的名字、角色、偏好、工作习惯时，用 rememberUserFact 记录下来。
            下次对话开始时画像会自动注入，你无需再问"请问你是谁"。
-        5. 当用户问历史讨论、方案背景、之前怎么说的等知识性问题时，
+        6. 当用户问历史讨论、方案背景、之前怎么说的等知识性问题时，
            用 searchKnowledge 搜索历史文档，不要凭记忆编造。
-        6. 语气轻松友好，但规则优先于幽默。
+        7. 语气轻松友好，但规则优先于幽默。
         """;
 
     @SystemMessage(CHAT_SYSTEM_MESSAGE)
+    @UserMessage("当前请求的可信项目 ID 是 {{projectId}}。必须在这个项目范围内处理用户消息；不要询问用户项目 ID。\n用户消息：{{userText}}")
     String chat(
             @MemoryId String memoryId,
-            @UserMessage String userText
+            @V("projectId") Long projectId,
+            @V("userText") String userText
     );
 
     @SystemMessage(CHAT_SYSTEM_MESSAGE)
+    @UserMessage("当前请求的可信项目 ID 是 {{projectId}}。必须在这个项目范围内处理用户消息；不要询问用户项目 ID。\n用户消息：{{userText}}")
     TokenStream chatStream(
             @MemoryId String memoryId,
-            @UserMessage String userText
+            @V("projectId") Long projectId,
+            @V("userText") String userText
     );
 
     @SystemMessage("""

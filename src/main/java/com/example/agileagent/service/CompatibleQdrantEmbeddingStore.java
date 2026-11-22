@@ -10,11 +10,15 @@ import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.RelevanceScore;
 import dev.langchain4j.store.embedding.filter.Filter;
+import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import dev.langchain4j.store.embedding.qdrant.QdrantEmbeddingStore;
 import io.qdrant.client.QdrantClient;
 import io.qdrant.client.QdrantGrpcClient;
 import io.qdrant.client.grpc.JsonWithInt;
 import io.qdrant.client.grpc.Points;
+import com.example.agileagent.config.ProjectScope;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.Comparator;
@@ -33,28 +37,55 @@ import java.util.stream.Collectors;
  */
 public class CompatibleQdrantEmbeddingStore extends QdrantEmbeddingStore {
 
+    private static final Logger log = LoggerFactory.getLogger(CompatibleQdrantEmbeddingStore.class);
+
     private final QdrantClient client;
     private final String collectionName;
     private final String payloadTextKey;
+    private final String targetHost;
+    private final int targetPort;
 
     public CompatibleQdrantEmbeddingStore(String collectionName, String host, int port,
                                           boolean useTls, String payloadTextKey, String apiKey) {
         this(createClient(host, port, useTls, apiKey), collectionName,
-                payloadTextKey == null ? "text_segment" : payloadTextKey);
+                payloadTextKey == null ? "text_segment" : payloadTextKey, host, port);
     }
 
     public CompatibleQdrantEmbeddingStore(QdrantClient client, String collectionName,
                                           String payloadTextKey) {
+        this(client, collectionName, payloadTextKey, "unknown", -1);
+    }
+
+    private CompatibleQdrantEmbeddingStore(QdrantClient client, String collectionName,
+                                           String payloadTextKey, String targetHost, int targetPort) {
         super(Objects.requireNonNull(client, "client"),
                 Objects.requireNonNull(collectionName, "collectionName"),
                 payloadTextKey == null ? "text_segment" : payloadTextKey);
         this.client = client;
         this.collectionName = collectionName;
         this.payloadTextKey = payloadTextKey == null ? "text_segment" : payloadTextKey;
+        this.targetHost = targetHost == null || targetHost.isBlank() ? "unknown" : targetHost;
+        this.targetPort = targetPort;
     }
 
     public static Builder compatibleBuilder() {
         return new Builder();
+    }
+
+    /** Builds the native Qdrant filter used for every project-scoped search. */
+    public static Filter projectFilter(Long projectId) {
+        if (projectId == null) {
+            throw new IllegalArgumentException("projectId is required for Qdrant filtering");
+        }
+        return MetadataFilterBuilder.metadataKey("projectId").isEqualTo(projectId.toString());
+    }
+
+    public static Filter documentFilter(Long projectId, String documentId) {
+        if (projectId == null || documentId == null || documentId.isBlank()) {
+            throw new IllegalArgumentException("projectId and documentId are required for Qdrant deletion");
+        }
+        return projectFilter(projectId).and(
+                MetadataFilterBuilder.metadataKey("documentId").isEqualTo(documentId));
     }
 
     @Override
@@ -72,14 +103,27 @@ public class CompatibleQdrantEmbeddingStore extends QdrantEmbeddingStore {
         }
 
         List<Points.ScoredPoint> points;
+        long started = System.nanoTime();
         try {
             ListenableFuture<List<Points.ScoredPoint>> future = client.searchAsync(builder.build());
             points = future.get();
+            log.debug("RAG downstream success service=Qdrant host={} port={} operation=search "
+                            + "collection={} elapsedMs={} requestId={}", targetHost, targetPort,
+                    collectionName, elapsedMs(started), ProjectScope.currentRequestId());
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
+            log.error("RAG downstream failure service=Qdrant host={} port={} operation=search "
+                            + "collection={} elapsedMs={} requestId={} exception={} message={}",
+                    targetHost, targetPort, collectionName, elapsedMs(started),
+                    ProjectScope.currentRequestId(), exception.getClass().getSimpleName(), safeMessage(exception));
             throw new RuntimeException("Qdrant search was interrupted", exception);
         } catch (ExecutionException exception) {
-            throw new RuntimeException("Qdrant search failed", exception.getCause());
+            Throwable cause = exception.getCause() == null ? exception : exception.getCause();
+            log.error("RAG downstream failure service=Qdrant host={} port={} operation=search "
+                            + "collection={} elapsedMs={} requestId={} exception={} message={}",
+                    targetHost, targetPort, collectionName, elapsedMs(started),
+                    ProjectScope.currentRequestId(), cause.getClass().getSimpleName(), safeMessage(cause));
+            throw new RuntimeException("Qdrant search failed", cause);
         }
 
         if (points.isEmpty()) {
@@ -182,6 +226,17 @@ public class CompatibleQdrantEmbeddingStore extends QdrantEmbeddingStore {
         return new QdrantClient(builder.build());
     }
 
+    private static long elapsedMs(long started) {
+        return (System.nanoTime() - started) / 1_000_000L;
+    }
+
+    private static String safeMessage(Throwable throwable) {
+        String message = throwable.getMessage();
+        if (message == null || message.isBlank()) return "";
+        String oneLine = message.replaceAll("[\\r\\n]+", " ");
+        return oneLine.length() > 240 ? oneLine.substring(0, 240) : oneLine;
+    }
+
     public static class Builder {
         private String collectionName;
         private String host = "localhost";
@@ -233,7 +288,7 @@ public class CompatibleQdrantEmbeddingStore extends QdrantEmbeddingStore {
             QdrantClient resolvedClient = client == null
                     ? createClient(host, port, useTls, apiKey)
                     : client;
-            return new CompatibleQdrantEmbeddingStore(resolvedClient, collectionName, payloadTextKey);
+            return new CompatibleQdrantEmbeddingStore(resolvedClient, collectionName, payloadTextKey, host, port);
         }
     }
 }
