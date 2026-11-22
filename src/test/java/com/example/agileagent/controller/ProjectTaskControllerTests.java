@@ -8,6 +8,7 @@ import com.example.agileagent.service.TaskNotFoundException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -67,5 +68,22 @@ class ProjectTaskControllerTests {
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
                 .andExpect(jsonPath("$.requestId").value("test-request-123"))
                 .andExpect(jsonPath("$.fieldErrors[?(@.field == 'title')]").isNotEmpty());
+    }
+
+    @Test
+    void databaseConstraintConflictReturnsSafe409WithRequestId() throws Exception {
+        when(service.getTask(10L, 201L)).thenThrow(new DataIntegrityViolationException(
+                "duplicate constraint secret SQL INSERT INTO app_user"));
+        mvc.perform(get("/api/projects/10/tasks/201").header("X-Request-Id", "conflict-test-123"))
+                .andExpect(status().isConflict())
+                .andExpect(header().string("X-Request-Id", "conflict-test-123"))
+                .andExpect(jsonPath("$.code").value("RESOURCE_CONFLICT"))
+                .andExpect(jsonPath("$.message").value("资源已存在或请求与已有数据冲突"))
+                .andExpect(jsonPath("$.requestId").value("conflict-test-123"))
+                .andExpect(jsonPath("$.timestamp").exists())
+                .andExpect(jsonPath("$.fieldErrors").isArray())
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("duplicate"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("constraint"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("SQL"))));
     }
 }

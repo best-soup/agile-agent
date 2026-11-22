@@ -119,8 +119,8 @@ public class TaskTools {
     private <T> T withContext(Object memoryId, Supplier<T> action) {
         ProjectScope.Context context = ProjectScope.contextFromMemoryId(memoryId);
         return ProjectScope.runWith(context, () -> {
-            log.info("Agent tool context restored projectId={} requestId={}",
-                    context.projectId(), context.requestId());
+            log.info("Agent tool context restored projectId={} requestId={} userId={}",
+                    context.projectId(), context.requestId(), context.userId());
             return action.get();
         });
     }

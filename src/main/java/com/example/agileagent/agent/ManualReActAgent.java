@@ -148,11 +148,14 @@ public class ManualReActAgent {
         List<ReActStep> trace = new ArrayList<>();
         Instant start = Instant.now();
 
-        log.info("══════ ReAct 循环开始 mode={} projectId={} inputLength={}",
-                mode, projectId, userInput == null ? 0 : userInput.length());
+        Long userId = ProjectScope.currentUserId();
+        String requestId = ProjectScope.currentRequestId();
+        log.info("action=react_start mode={} requestId={} userId={} projectId={}",
+                mode, requestId, userId, projectId);
 
         for (int step = 0; step < MAX_STEPS; step++) {
-            log.info("── ReAct Step {} ──", step);
+            log.info("action=react_step step={} requestId={} userId={} projectId={}",
+                    step, requestId, userId, projectId);
 
             // ──── Reasoning ────
             AiMessage aiMessage;
@@ -164,23 +167,25 @@ public class ManualReActAgent {
                                 .build()
                 ).aiMessage();
             } catch (Exception e) {
-                log.error("LLM 调用异常 at step {}: {}", step, e.getMessage());
+                log.error("action=llm_failed step={} durationMs={} exceptionType={} requestId={} userId={} projectId={}",
+                        step, Duration.between(start, Instant.now()).toMillis(), e.getClass().getSimpleName(),
+                        requestId, userId, projectId);
                 trace.add(ReActStep.llmError(step, e));
                 return new ReActResult("LLM 调用失败: " + e.getMessage(), trace, Duration.between(start, Instant.now()));
             }
 
             String text = aiMessage.text();
             boolean hasToolCalls = aiMessage.hasToolExecutionRequests();
-            log.info("Reasoning: hasToolCalls={} text={}", hasToolCalls,
-                    text != null ? text.substring(0, Math.min(100, text.length())) : "(null)");
+            log.info("action=react_model_response step={} hasToolCalls={} requestId={} userId={} projectId={}",
+                    step, hasToolCalls, requestId, userId, projectId);
 
             // ──── 终止判断：无 tool call → 最终回复 ────
             if (!hasToolCalls) {
                 remember(memory, aiMessage);
                 trace.add(ReActStep.finalAnswer(step, text));
                 Duration total = Duration.between(start, Instant.now());
-                log.info("══════ ReAct 结束 step={} totalSteps={} duration={}ms ══════",
-                        step, trace.size(), total.toMillis());
+                log.info("action=react_end outcome=success step={} totalSteps={} durationMs={} requestId={} userId={} projectId={}",
+                        step, trace.size(), total.toMillis(), requestId, userId, projectId);
                 return new ReActResult(text, trace, total);
             }
 
@@ -193,18 +198,16 @@ public class ManualReActAgent {
                 toolIndex++;
                 Instant toolStart = Instant.now();
 
-                log.info("Acting [{}/{}]: tool={} args={}",
-                        toolIndex, aiMessage.toolExecutionRequests().size(),
-                        req.name(), req.arguments());
+                log.info("action=tool_execution_start step={} toolIndex={} tool={} requestId={} userId={} projectId={}",
+                        step, toolIndex, req.name(), requestId, userId, projectId);
 
                 try {
                     // 真实工具调用
                     String result = dispatchTool(projectId, req);
 
                     long durationMs = Duration.between(toolStart, Instant.now()).toMillis();
-                    log.info("Observation: tool={} duration={}ms result={}",
-                            req.name(), durationMs,
-                            result != null ? result.substring(0, Math.min(100, result.length())) : "(null)");
+                    log.info("action=tool_execution_success step={} tool={} durationMs={} requestId={} userId={} projectId={}",
+                            step, req.name(), durationMs, requestId, userId, projectId);
 
                     trace.add(ReActStep.toolSuccess(step, toolIndex, req, result, durationMs));
 
@@ -219,7 +222,8 @@ public class ManualReActAgent {
                     String errorMsg = "工具 [" + req.name() + "] 执行异常: " + e.getClass().getSimpleName()
                             + " - " + (e.getMessage() != null ? e.getMessage() : "(无异常消息)");
 
-                    log.error("Observation ERROR: tool={} duration={}ms error={}", req.name(), durationMs, errorMsg, e);
+                    log.error("action=tool_execution_failed step={} tool={} durationMs={} exceptionType={} requestId={} userId={} projectId={}",
+                            step, req.name(), durationMs, e.getClass().getSimpleName(), requestId, userId, projectId);
 
                     trace.add(ReActStep.toolError(step, toolIndex, req, errorMsg, durationMs, e));
 
@@ -237,7 +241,8 @@ public class ManualReActAgent {
         String fallback = "[系统] ReAct 循环已达到上限 " + MAX_STEPS + " 步，已强制终止。"
                 + "请尝试缩小问题范围或检查工单数量。";
         trace.add(ReActStep.maxStepsExceeded(MAX_STEPS));
-        log.warn("ReAct 达到最大步数限制 maxSteps={}", MAX_STEPS);
+        log.warn("action=react_end outcome=max_steps maxSteps={} durationMs={} requestId={} userId={} projectId={}",
+                MAX_STEPS, Duration.between(start, Instant.now()).toMillis(), requestId, userId, projectId);
         remember(memory, new AiMessage(fallback));
         return new ReActResult(fallback, trace, Duration.between(start, Instant.now()));
     }
@@ -381,11 +386,11 @@ public class ManualReActAgent {
         ToolExecutor executor = toolDispatcher.get(toolName);
         if (executor == null) {
             String msg = "未知工具: " + toolName + "（已注册: " + toolDispatcher.keySet() + "）";
-            log.warn(msg);
+            log.warn("action=unknown_tool tool={} requestId={} userId={} projectId={}",
+                    toolName, ProjectScope.currentRequestId(), ProjectScope.currentUserId(), projectId);
             return "ERROR: " + msg;
         }
         JsonNode args = objectMapper.readTree(req.arguments());
-        log.debug("dispatchTool: {} args={}", toolName, args);
         return executor.execute(projectId, args);
     }
 

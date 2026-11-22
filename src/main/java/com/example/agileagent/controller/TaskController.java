@@ -11,6 +11,8 @@ import com.example.agileagent.service.RagService;
 import com.example.agileagent.service.ProjectAccessService;
 import com.example.agileagent.service.TaskDraftService;
 import dev.langchain4j.service.TokenStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,6 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
 @RestController
 @RequestMapping("/api/task")
 public class TaskController {
+    private static final Logger log = LoggerFactory.getLogger(TaskController.class);
 
     @Autowired
     private AgileMasterAgent agileMasterAgent;
@@ -59,7 +62,7 @@ public class TaskController {
             @RequestBody String meetingText
     ) {
         requireMeetingText(meetingText);
-        System.out.println("收到会议纪要，Agent 开始生成任务草稿...");
+        logRequest("meeting_process", projectId, false);
         String date = extractDate(meetingText);
         return ProjectScope.runInProject(projectId, () -> {
             projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
@@ -79,7 +82,7 @@ public class TaskController {
             @RequestBody String meetingText
     ) {
         requireMeetingText(meetingText);
-        System.out.println("收到会议纪要，开始生成待确认任务草稿...");
+        logRequest("meeting_process_manual", projectId, false);
         String date = extractDate(meetingText);
         return ProjectScope.runInProject(projectId, () -> {
             projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.WRITE);
@@ -99,7 +102,7 @@ public class TaskController {
             @RequestBody String userMessage
     ) {
         requireMessage(userMessage);
-        System.out.println("收到聊天消息...");
+        logRequest("chat", projectId, false);
         return ProjectScope.runInProject(projectId, () -> {
             projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
             return agileMasterAgent.chat(memoryId(projectId), projectId, userMessage);
@@ -116,7 +119,7 @@ public class TaskController {
             @RequestBody String userMessage
     ) {
         requireMessage(userMessage);
-        System.out.println("收到聊天消息（手写 ReAct）...");
+        logRequest("chat_manual", projectId, false);
         return ProjectScope.runInProject(projectId, () -> {
             projectAccessService.requireCurrentProject(projectId, ProjectAccessService.Permission.READ);
             return manualReActAgent.executeChat(projectId, userMessage);
@@ -133,7 +136,7 @@ public class TaskController {
             @RequestBody String userMessage
     ) {
         requireMessage(userMessage);
-        System.out.println("收到聊天消息（流式）...");
+        logRequest("chat", projectId, true);
         SseEmitter emitter = new SseEmitter(sseTimeoutMs);
         AtomicBoolean finished = new AtomicBoolean(false);
         AtomicReference<ProjectScope.Context> contextRef = new AtomicReference<>();
@@ -172,6 +175,11 @@ public class TaskController {
 
     private String memoryId(Long projectId) {
         return ProjectScope.encodeMemoryId(projectId);
+    }
+
+    private void logRequest(String action, Long projectId, boolean streaming) {
+        log.info("action={} requestId={} userId={} projectId={} streaming={}",
+                action, ProjectScope.currentRequestId(), ProjectScope.currentUserId(), projectId, streaming);
     }
 
     private TaskDraftResponse createDraft(Long projectId, String meetingText, String sourceRef) {
